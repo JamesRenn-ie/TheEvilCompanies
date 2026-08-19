@@ -17,13 +17,38 @@ PROJECTOR_HEIGHT = 720
 # Calibration marker IDs
 CALIBRATION_IDS = [0, 1, 2, 3]
 
-# Interactive marker
-INTERACTIVE_ID = 10
+# Interactive markers
+# Every marker from 4 onwards will create a black circle.
+INTERACTIVE_IDS = list(range(4, 12))
 
-SMOOTHING_TIME = 0.5  # seconds
+# Circle radius
+CIRCLE_RADIUS = 80
 
-position_history = deque()
-last_position = None
+# Position smoothing
+SMOOTHING_TIME = 0.2  # seconds
+
+# How long to keep a marker visible after detection is lost
+MARKER_TIMEOUT = 0.5  # seconds
+
+
+# ============================================================
+# POSITION TRACKING
+# ============================================================
+
+position_histories = {
+    marker_id: deque()
+    for marker_id in INTERACTIVE_IDS
+}
+
+last_positions = {
+    marker_id: None
+    for marker_id in INTERACTIVE_IDS
+}
+
+last_detection_times = {
+    marker_id: None
+    for marker_id in INTERACTIVE_IDS
+}
 
 
 # ============================================================
@@ -84,12 +109,16 @@ def marker_center(corners):
     """
     Get the centre of an ArUco marker.
     """
+
     points = corners.reshape(4, 2)
 
     x = np.mean(points[:, 0])
     y = np.mean(points[:, 1])
 
-    return np.array([x, y], dtype=np.float32)
+    return np.array(
+        [x, y],
+        dtype=np.float32
+    )
 
 
 def calculate_homography(corners, ids):
@@ -100,16 +129,20 @@ def calculate_homography(corners, ids):
 
     camera_points = {}
 
-    for marker_id, marker_corners in zip(ids, corners):
+    for marker_id, marker_corners in zip(
+        ids,
+        corners
+    ):
 
         marker_id = int(marker_id)
 
         if marker_id in CALIBRATION_IDS:
+
             camera_points[marker_id] = marker_center(
                 marker_corners
             )
 
-    # We need all four markers
+    # Need all four calibration markers
     if not all(
         marker_id in camera_points
         for marker_id in CALIBRATION_IDS
@@ -117,12 +150,6 @@ def calculate_homography(corners, ids):
         return None
 
     # Camera coordinates
-    #
-    # 0 = top-left
-    # 1 = top-right
-    # 2 = bottom-left
-    # 3 = bottom-right
-
     src = np.array([
         camera_points[0],
         camera_points[1],
@@ -130,7 +157,7 @@ def calculate_homography(corners, ids):
         camera_points[3],
     ], dtype=np.float32)
 
-    # Corresponding projector coordinates
+    # Projector coordinates
     dst = np.array([
         [0, 0],
         [PROJECTOR_WIDTH - 1, 0],
@@ -138,14 +165,17 @@ def calculate_homography(corners, ids):
         [PROJECTOR_WIDTH - 1, PROJECTOR_HEIGHT - 1],
     ], dtype=np.float32)
 
-    H, _ = cv2.findHomography(src, dst)
+    H, _ = cv2.findHomography(
+        src,
+        dst
+    )
 
     return H
 
 
 def transform_point(point, H):
     """
-    Transform a camera coordinate into projector coordinates.
+    Transform camera coordinate into projector coordinate.
     """
 
     point = np.array(
@@ -175,15 +205,22 @@ while True:
         print("Failed to receive frame")
         break
 
+    current_time = time.time()
+
     # --------------------------------------------------------
     # Detect ArUco markers
     # --------------------------------------------------------
 
-    corners, ids, rejected = detector.detectMarkers(frame)
+    corners, ids, rejected = detector.detectMarkers(
+        frame
+    )
 
     # --------------------------------------------------------
-    # Create projection image
+    # BLUE BACKGROUND
     # --------------------------------------------------------
+
+    # OpenCV uses BGR.
+    # (255, 0, 0) = blue.
 
     projection = np.zeros(
         (
@@ -194,12 +231,15 @@ while True:
         dtype=np.uint8
     )
 
+    projection[:] = (255, 0, 0)
+
     # --------------------------------------------------------
-    # Draw detected markers on camera view
+    # Process detections
     # --------------------------------------------------------
 
     if ids is not None:
 
+        # Draw markers on camera preview
         aruco.drawDetectedMarkers(
             frame,
             corners,
@@ -207,7 +247,7 @@ while True:
         )
 
         # ----------------------------------------------------
-        # Calculate calibration
+        # Update calibration
         # ----------------------------------------------------
 
         new_H = calculate_homography(
@@ -219,116 +259,181 @@ while True:
             H = new_H
 
         # ----------------------------------------------------
-        # Interactive marker
+        # Track interactive markers
         # ----------------------------------------------------
 
         if H is not None:
 
-            current_time = time.time()
-
-            for marker_id, marker_corners in zip(ids, corners):
+            for marker_id, marker_corners in zip(
+                ids,
+                corners
+            ):
 
                 marker_id = int(marker_id)
 
-                if marker_id == INTERACTIVE_ID:
+                # Ignore calibration markers
+                if marker_id not in INTERACTIVE_IDS:
+                    continue
 
-                    # Position in camera image
-                    camera_position = marker_center(marker_corners)
-
-                    # Convert to projector coordinates
-                    x, y = transform_point(
-                        camera_position,
-                        H
-                    )
-
-                    # Add new position to history
-                    position_history.append(
-                        (current_time, x, y)
-                    )
-
-                    # Remove positions older than 0.5 seconds
-                    while (
-                        position_history
-                        and current_time - position_history[0][0]
-                        > SMOOTHING_TIME
-                    ):
-                        position_history.popleft()
-
-                    # Average all recent positions
-                    avg_x = int(
-                        np.mean([
-                            position[1]
-                            for position in position_history
-                        ])
-                    )
-
-                    avg_y = int(
-                        np.mean([
-                            position[2]
-                            for position in position_history
-                        ])
-                    )
-
-                    last_position = (avg_x, avg_y)
-
-            # If marker wasn't detected this frame,
-            # keep using the last known position.
-            if last_position is not None:
-
-                x, y = last_position
-
-                cv2.circle(
-                    projection,
-                    (x, y),
-                    80,
-                    (0, 255, 0),
-                    -1
+                # Camera position
+                camera_position = marker_center(
+                    marker_corners
                 )
 
-                cv2.circle(
-                    projection,
-                    (x, y),
-                    30,
-                    (255, 255, 255),
-                    -1
+                # Convert to projector position
+                x, y = transform_point(
+                    camera_position,
+                    H
                 )
 
-                cv2.line(
-                    projection,
-                    (x - 100, y),
-                    (x + 100, y),
-                    (255, 255, 255),
-                    3
+                # Add position to history
+                history = position_histories[
+                    marker_id
+                ]
+
+                history.append(
+                    (
+                        current_time,
+                        x,
+                        y
+                    )
                 )
 
-                cv2.line(
-                    projection,
-                    (x, y - 100),
-                    (x, y + 100),
-                    (255, 255, 255),
-                    3
+                # Remove old positions
+                while (
+                    history
+                    and current_time - history[0][0]
+                    > SMOOTHING_TIME
+                ):
+                    history.popleft()
+
+                # Average recent positions
+                avg_x = int(
+                    np.mean([
+                        position[1]
+                        for position in history
+                    ])
                 )
-    # --------------------------------------------------------
-    # Show camera
-    # --------------------------------------------------------
+
+                avg_y = int(
+                    np.mean([
+                        position[2]
+                        for position in history
+                    ])
+                )
+
+                # Save position
+                last_positions[marker_id] = (
+                    avg_x,
+                    avg_y
+                )
+
+                last_detection_times[marker_id] = (
+                    current_time
+                )
+
+    # ========================================================
+    # DRAW BLACK CIRCLES
+    # ========================================================
+
+    if H is not None:
+
+        for marker_id in INTERACTIVE_IDS:
+
+            position = last_positions[marker_id]
+
+            last_detection = (
+                last_detection_times[marker_id]
+            )
+
+            # Marker has never been detected
+            if position is None:
+                continue
+
+            # Marker has disappeared
+            if (
+                last_detection is None
+                or current_time - last_detection
+                > MARKER_TIMEOUT
+            ):
+                continue
+
+            x, y = position
+
+            # Black circle
+            cv2.circle(
+                projection,
+                (x, y),
+                CIRCLE_RADIUS,
+                (0, 0, 0),
+                -1
+            )
+
+    # ========================================================
+    # CALCULATE BLUE REMOVED
+    # ========================================================
+
+    # Black pixels are pixels where all BGR values are zero.
+
+    black_mask = cv2.inRange(
+        projection,
+        np.array([0, 0, 0]),
+        np.array([0, 0, 0])
+    )
+
+    black_pixels = cv2.countNonZero(
+        black_mask
+    )
+
+    total_pixels = (
+        PROJECTOR_WIDTH
+        * PROJECTOR_HEIGHT
+    )
+
+    percentage_removed = (
+        black_pixels
+        / total_pixels
+        * 100
+    )
+
+    # ========================================================
+    # DISPLAY PERCENTAGE
+    # ========================================================
+
+    text = f"{percentage_removed:.1f}%"
+
+    cv2.putText(
+        projection,
+        text,
+        (30, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.5,
+        (255, 255, 255),
+        3,
+        cv2.LINE_AA
+    )
+
+    # ========================================================
+    # SHOW CAMERA
+    # ========================================================
 
     cv2.imshow(
         "Camera",
         frame
     )
 
-    # --------------------------------------------------------
-    # Show projector output
-    # --------------------------------------------------------
+    # ========================================================
+    # SHOW PROJECTION
+    # ========================================================
 
     cv2.imshow(
         "Projection",
         projection
     )
 
-    # --------------------------------------------------------
-    # Keyboard
-    # --------------------------------------------------------
+    # ========================================================
+    # KEYBOARD
+    # ========================================================
 
     key = cv2.waitKey(1) & 0xFF
 
