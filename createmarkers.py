@@ -3,31 +3,39 @@ import numpy as np
 
 dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
 
-marker_size = 500
-border = 50
-markers_per_row = 4
-markers_per_column = 3
+# A4 at 300 DPI
+DPI = 300
+A4_W = int(8.27 * DPI)
+A4_H = int(11.69 * DPI)
 
-sheet_width = markers_per_row * (marker_size + border) + border
-sheet_height = markers_per_column * (marker_size + border) + border
+# Marker size: 30 mm
+marker_size = int(30 / 25.4 * DPI)
 
-sheet = np.ones((sheet_height, sheet_width), dtype=np.uint8) * 255
+cols = 5
+rows = 8
 
-for i in range(markers_per_row * markers_per_column):
+# Calculate equal spacing
+margin_x = (A4_W - cols * marker_size) // (cols + 1)
+margin_y = (A4_H - rows * marker_size) // (rows + 1)
+
+sheet = np.ones((A4_H, A4_W), dtype=np.uint8) * 255
+
+for marker_id in range(40):
     marker = cv2.aruco.generateImageMarker(
         dictionary,
-        i,
+        marker_id,
         marker_size
     )
 
-    row = i // markers_per_row
-    col = i % markers_per_row
+    row = marker_id // cols
+    col = marker_id % cols
 
-    x = border + col * (marker_size + border)
-    y = border + row * (marker_size + border)
+    x = margin_x + col * (marker_size + margin_x)
+    y = margin_y + row * (marker_size + margin_y)
 
-    sheet[y:y+marker_size, x:x+marker_size] = marker
+    sheet[y:y + marker_size, x:x + marker_size] = marker
 
-cv2.imwrite("aruco_markers.png", sheet)
+cv2.imwrite("aruco_40_a4.png", sheet)
 
-print("Saved aruco_markers.png")
+print("Saved aruco_40_a4.png")
+print(f"Marker size: {marker_size}px (~30mm)")
