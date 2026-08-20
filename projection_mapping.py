@@ -3,6 +3,9 @@ import numpy as np
 from collections import deque
 import time
 
+import pygame
+import audio_manager
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -37,6 +40,18 @@ CARDS_PER_TEAM = {
     "l": 5,
     "b": 2,
     "p": 2,
+}
+
+# ------------------------------------------------------------
+# Map this script's short card-type codes to the sfx event_type
+# names used by audio_manager (which match sfx/ filename prefixes).
+# ------------------------------------------------------------
+CARD_TYPE_TO_SFX_EVENT = {
+    "d": "datacenter",
+    "a": "activist",
+    "l": "lawyer",
+    "b": "billionaire",
+    "p": "president",
 }
 
 # First ArUco ID used for cards
@@ -406,6 +421,8 @@ while True:
 
                 card = cards[marker_id]
 
+                was_visible = card["visible"]
+
                 # Camera position
                 camera_position = marker_center(
                     marker_corners
@@ -461,6 +478,15 @@ while True:
 
                 card["last_seen"] = current_time
                 card["visible"] = True
+
+                if not was_visible:
+
+                    audio_manager.audio.play(
+                        CARD_TYPE_TO_SFX_EVENT.get(
+                            card["type"],
+                            card["type"]
+                        )
+                    )
 
     # ========================================================
     # UPDATE CARD VISIBILITY

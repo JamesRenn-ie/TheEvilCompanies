@@ -2,6 +2,8 @@ import pygame
 import math
 import numpy as np
 
+import audio_manager
+
 
 # ============================================================
 # SETTINGS
@@ -755,6 +757,8 @@ while running:
                     mouse_y
                 )
 
+                audio_manager.audio.play("datacenter")
+
             # -----------------------------------------------
             # CREATE ACTIVIST
             # -----------------------------------------------
@@ -769,6 +773,8 @@ while running:
                     mouse_y
                 )
 
+                audio_manager.audio.play("activist")
+
             # -----------------------------------------------
             # CREATE LAWYER
             # -----------------------------------------------
@@ -782,6 +788,8 @@ while running:
                     mouse_x,
                     mouse_y
                 )
+
+                audio_manager.audio.play("lawyer")
 
         # ----------------------------------------------------
         # MOUSE BUTTON DOWN
