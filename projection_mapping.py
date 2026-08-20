@@ -17,36 +17,121 @@ PROJECTOR_HEIGHT = 720
 # Calibration marker IDs
 CALIBRATION_IDS = [0, 1, 2, 3]
 
-# Interactive markers
-# Every marker from 4 onwards will create a black circle.
-INTERACTIVE_IDS = list(range(4, 12))
+# ============================================================
+# CARD CONFIGURATION
+# ============================================================
 
-# Circle radius
+NUM_TEAMS = 4
+
+# Number of each card type PER TEAM.
+#
+# Change these values to change the number of cards.
+#
+# d = 10 per team
+# a = 5 per team
+# l = 5 per team
+# b = 2 per team
+# p = 2 per team
+#
+CARDS_PER_TEAM = {
+    "d": 10,
+    "a": 5,
+    "l": 5,
+    "b": 2,
+    "p": 2,
+}
+
+# First ArUco ID used for cards.
+# 0, 1, 2, 3 are reserved for calibration.
+START_CARD_ID = 4
+
+# Circle radius for cards
 CIRCLE_RADIUS = 80
 
 # Position smoothing
-SMOOTHING_TIME = 0.2  # seconds
+SMOOTHING_TIME = 0.1  # seconds
 
-# How long to keep a marker visible after detection is lost
+# How long to keep a card visible after detection is lost
 MARKER_TIMEOUT = 0.5  # seconds
 
 
 # ============================================================
-# POSITION TRACKING
+# GENERATE CARD ASSIGNMENTS
+# ============================================================
+
+# Each physical ArUco marker gets assigned:
+#
+#   team
+#   card type
+#
+# Example:
+#
+#   ArUco 4  -> Team 1, card d
+#   ArUco 5  -> Team 1, card d
+#   ...
+#   ArUco 14 -> Team 1, card a
+#
+# The IDs are generated automatically from the configuration.
+
+CARD_ASSIGNMENTS = {}
+
+marker_id = START_CARD_ID
+
+for team in range(1, NUM_TEAMS + 1):
+
+    for card_type, quantity in CARDS_PER_TEAM.items():
+
+        for _ in range(quantity):
+
+            CARD_ASSIGNMENTS[marker_id] = {
+                "team": team,
+                "type": card_type,
+            }
+
+            marker_id += 1
+
+
+# All interactive marker IDs
+INTERACTIVE_IDS = list(CARD_ASSIGNMENTS.keys())
+
+print("\nCard assignments:")
+print("-----------------")
+
+for marker_id, card in CARD_ASSIGNMENTS.items():
+
+    print(
+        f"ArUco {marker_id:3d} "
+        f"-> Team {card['team']} "
+        f"Card {card['type']}"
+    )
+
+print()
+print(f"Total cards: {len(CARD_ASSIGNMENTS)}")
+print()
+
+
+# ============================================================
+# CARD TRACKING STATE
+# ============================================================
+
+cards = {
+    marker_id: {
+        "team": data["team"],
+        "type": data["type"],
+        "position": None,
+        "last_seen": None,
+        "visible": False,
+    }
+    for marker_id, data in CARD_ASSIGNMENTS.items()
+}
+
+
+# ============================================================
+# POSITION HISTORIES
 # ============================================================
 
 position_histories = {
     marker_id: deque()
-    for marker_id in INTERACTIVE_IDS
-}
-
-last_positions = {
-    marker_id: None
-    for marker_id in INTERACTIVE_IDS
-}
-
-last_detection_times = {
-    marker_id: None
     for marker_id in INTERACTIVE_IDS
 }
 
@@ -219,9 +304,6 @@ while True:
     # BLUE BACKGROUND
     # --------------------------------------------------------
 
-    # OpenCV uses BGR.
-    # (255, 0, 0) = blue.
-
     projection = np.zeros(
         (
             PROJECTOR_HEIGHT,
@@ -259,7 +341,7 @@ while True:
             H = new_H
 
         # ----------------------------------------------------
-        # Track interactive markers
+        # Process cards
         # ----------------------------------------------------
 
         if H is not None:
@@ -271,22 +353,33 @@ while True:
 
                 marker_id = int(marker_id)
 
-                # Ignore calibration markers
-                if marker_id not in INTERACTIVE_IDS:
+                # Ignore anything that isn't one of our cards
+                if marker_id not in cards:
                     continue
 
-                # Camera position
+                card = cards[marker_id]
+
+                # --------------------------------------------
+                # Find camera position
+                # --------------------------------------------
+
                 camera_position = marker_center(
                     marker_corners
                 )
 
+                # --------------------------------------------
                 # Convert to projector position
+                # --------------------------------------------
+
                 x, y = transform_point(
                     camera_position,
                     H
                 )
 
+                # --------------------------------------------
                 # Add position to history
+                # --------------------------------------------
+
                 history = position_histories[
                     marker_id
                 ]
@@ -307,7 +400,10 @@ while True:
                 ):
                     history.popleft()
 
+                # --------------------------------------------
                 # Average recent positions
+                # --------------------------------------------
+
                 avg_x = int(
                     np.mean([
                         position[1]
@@ -322,45 +418,64 @@ while True:
                     ])
                 )
 
-                # Save position
-                last_positions[marker_id] = (
+                # --------------------------------------------
+                # Update card state
+                # --------------------------------------------
+
+                card["position"] = (
                     avg_x,
                     avg_y
                 )
 
-                last_detection_times[marker_id] = (
-                    current_time
-                )
+                card["last_seen"] = current_time
+
+                card["visible"] = True
 
     # ========================================================
-    # DRAW BLACK CIRCLES
+    # UPDATE CARD VISIBILITY
+    # ========================================================
+
+    for marker_id, card in cards.items():
+
+        if card["last_seen"] is None:
+
+            card["visible"] = False
+
+            continue
+
+        if (
+            current_time - card["last_seen"]
+            > MARKER_TIMEOUT
+        ):
+
+            card["visible"] = False
+
+    # ========================================================
+    # DRAW CARDS
     # ========================================================
 
     if H is not None:
 
-        for marker_id in INTERACTIVE_IDS:
+        for marker_id, card in cards.items():
 
-            position = last_positions[marker_id]
-
-            last_detection = (
-                last_detection_times[marker_id]
-            )
-
-            # Marker has never been detected
-            if position is None:
+            if not card["visible"]:
                 continue
 
-            # Marker has disappeared
-            if (
-                last_detection is None
-                or current_time - last_detection
-                > MARKER_TIMEOUT
-            ):
+            # A cards are tracked but do not create circles
+            if card["type"] == "a":
+                continue
+
+            position = card["position"]
+
+            if position is None:
                 continue
 
             x, y = position
 
+            # --------------------------------------------
             # Black circle
+            # --------------------------------------------
+
             cv2.circle(
                 projection,
                 (x, y),
@@ -369,11 +484,29 @@ while True:
                 -1
             )
 
+            # --------------------------------------------
+            # Display card information
+            # --------------------------------------------
+
+            label = (
+                f"T{card['team']} "
+                f"{card['type']}"
+            )
+
+            cv2.putText(
+                projection,
+                label,
+                (x - 35, y + 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA
+            )
+
     # ========================================================
     # CALCULATE BLUE REMOVED
     # ========================================================
-
-    # Black pixels are pixels where all BGR values are zero.
 
     black_mask = cv2.inRange(
         projection,
@@ -397,7 +530,7 @@ while True:
     )
 
     # ========================================================
-    # DISPLAY PERCENTAGE
+    # DISPLAY OVERALL PERCENTAGE
     # ========================================================
 
     text = f"{percentage_removed:.1f}%"
@@ -412,6 +545,45 @@ while True:
         3,
         cv2.LINE_AA
     )
+
+    # ========================================================
+    # DISPLAY CARD COUNTS
+    # ========================================================
+
+    # Count currently visible cards by team
+
+    team_counts = {
+        team: 0
+        for team in range(1, NUM_TEAMS + 1)
+    }
+
+    for card in cards.values():
+
+        if card["visible"]:
+            team_counts[card["team"]] += 1
+
+    # Display team counts
+    y_position = 100
+
+    for team in range(1, NUM_TEAMS + 1):
+
+        text = (
+            f"Team {team}: "
+            f"{team_counts[team]} cards"
+        )
+
+        cv2.putText(
+            projection,
+            text,
+            (30, y_position),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
+
+        y_position += 35
 
     # ========================================================
     # SHOW CAMERA
