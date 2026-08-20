@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from collections import deque
 import time
+import threading
 
 # ============================================================
 # CONFIGURATION
@@ -10,27 +11,13 @@ import time
 PHONE_IP = "10.34.201.200"
 VIDEO_URL = f"http://{PHONE_IP}:8080/video"
 
-# Projector resolution
 PROJECTOR_WIDTH = 1280
 PROJECTOR_HEIGHT = 720
 
-# Calibration marker IDs
 CALIBRATION_IDS = [0, 1, 2, 3]
-
-# ============================================================
-# CARD CONFIGURATION
-# ============================================================
 
 NUM_TEAMS = 4
 
-# Number of each card type PER TEAM
-#
-# d = 10 per team
-# a = 5 per team
-# l = 5 per team
-# b = 2 per team
-# p = 2 per team
-#
 CARDS_PER_TEAM = {
     "d": 20,
     "a": 10,
@@ -39,20 +26,17 @@ CARDS_PER_TEAM = {
     "p": 1,
 }
 
-# First ArUco ID used for cards
 START_CARD_ID = 4
 
-# Circle radius
 CIRCLE_RADIUS = 80
 
-# Position smoothing
-SMOOTHING_TIME = 0.2  # seconds
+# Lower values = less latency
+SMOOTHING_TIME = 0.05
 
-# How long a card remains visible after detection is lost
-MARKER_TIMEOUT = 0.5  # seconds
+# Lower values = less delay when a marker disappears
+MARKER_TIMEOUT = 0.15
 
-# Time between scoring events
-SCORING_INTERVAL = 10.0  # seconds
+SCORING_INTERVAL = 10.0
 
 
 # ============================================================
@@ -180,6 +164,61 @@ print("Connected to camera")
 
 
 # ============================================================
+# LATEST-FRAME CAMERA THREAD
+# ============================================================
+
+latest_frame = None
+frame_lock = threading.Lock()
+camera_running = True
+
+
+def camera_reader():
+
+    global latest_frame
+    global camera_running
+
+    while camera_running:
+
+        ret, frame = cap.read()
+
+        if not ret:
+            print("Camera frame read failed")
+            time.sleep(0.01)
+            continue
+
+        # Replace the old frame immediately.
+        # We NEVER build up a queue of frames.
+        with frame_lock:
+            latest_frame = frame
+
+
+camera_thread = threading.Thread(
+    target=camera_reader,
+    daemon=True
+)
+
+camera_thread.start()
+
+
+# ============================================================
+# GET NEWEST FRAME
+# ============================================================
+
+def get_latest_frame():
+
+    global latest_frame
+
+    with frame_lock:
+
+        if latest_frame is None:
+            return None
+
+        # Copy so the camera thread can immediately
+        # replace the frame while we process this one.
+        return latest_frame.copy()
+
+
+# ============================================================
 # PROJECTOR WINDOW
 # ============================================================
 
@@ -203,9 +242,6 @@ H = None
 
 
 def marker_center(corners):
-    """
-    Get the centre of an ArUco marker.
-    """
 
     points = corners.reshape(4, 2)
 
@@ -219,10 +255,6 @@ def marker_center(corners):
 
 
 def calculate_homography(corners, ids):
-    """
-    Find the four calibration markers and calculate
-    camera -> projector transformation.
-    """
 
     camera_points = {}
 
@@ -239,14 +271,12 @@ def calculate_homography(corners, ids):
                 marker_corners
             )
 
-    # Need all four calibration markers
     if not all(
         marker_id in camera_points
         for marker_id in CALIBRATION_IDS
     ):
         return None
 
-    # Camera coordinates
     src = np.array([
         camera_points[0],
         camera_points[1],
@@ -254,7 +284,6 @@ def calculate_homography(corners, ids):
         camera_points[3],
     ], dtype=np.float32)
 
-    # Projector coordinates
     dst = np.array([
         [0, 0],
         [PROJECTOR_WIDTH - 1, 0],
@@ -271,9 +300,6 @@ def calculate_homography(corners, ids):
 
 
 def transform_point(point, H):
-    """
-    Transform camera coordinate into projector coordinate.
-    """
 
     point = np.array(
         [[point]],
@@ -295,12 +321,6 @@ def transform_point(point, H):
 # ============================================================
 
 def score_visible_cards():
-    """
-    Give each team one point for every currently visible
-    card that creates a circle.
-
-    'a' cards do not create circles and therefore do not score.
-    """
 
     points_awarded = {
         team: 0
@@ -309,11 +329,9 @@ def score_visible_cards():
 
     for card in cards.values():
 
-        # A cards do not create circles
         if card["type"] == "a":
             continue
 
-        # Only visible cards score
         if not card["visible"]:
             continue
 
@@ -331,11 +349,16 @@ def score_visible_cards():
 
 while True:
 
-    ret, frame = cap.read()
+    # ========================================================
+    # GET NEWEST AVAILABLE FRAME
+    # ========================================================
 
-    if not ret:
-        print("Failed to receive frame")
-        break
+    frame = get_latest_frame()
+
+    if frame is None:
+
+        time.sleep(0.001)
+        continue
 
     current_time = time.time()
 
@@ -368,7 +391,6 @@ while True:
 
     if ids is not None:
 
-        # Draw markers on camera preview
         aruco.drawDetectedMarkers(
             frame,
             corners,
@@ -376,16 +398,19 @@ while True:
         )
 
         # ----------------------------------------------------
-        # UPDATE CALIBRATION
+        # ONLY CALCULATE HOMOGRAPHY UNTIL IT EXISTS
         # ----------------------------------------------------
 
-        new_H = calculate_homography(
-            corners,
-            ids
-        )
+        if H is None:
 
-        if new_H is not None:
-            H = new_H
+            new_H = calculate_homography(
+                corners,
+                ids
+            )
+
+            if new_H is not None:
+                H = new_H
+                print("Calibration complete")
 
         # ----------------------------------------------------
         # TRACK CARDS
@@ -400,24 +425,20 @@ while True:
 
                 marker_id = int(marker_id)
 
-                # Ignore unknown markers
                 if marker_id not in cards:
                     continue
 
                 card = cards[marker_id]
 
-                # Camera position
                 camera_position = marker_center(
                     marker_corners
                 )
 
-                # Convert to projector position
                 x, y = transform_point(
                     camera_position,
                     H
                 )
 
-                # Add position to history
                 history = position_histories[
                     marker_id
                 ]
@@ -430,7 +451,6 @@ while True:
                     )
                 )
 
-                # Remove old positions
                 while (
                     history
                     and current_time - history[0][0]
@@ -438,7 +458,6 @@ while True:
                 ):
                     history.popleft()
 
-                # Average recent positions
                 avg_x = int(
                     np.mean([
                         position[1]
@@ -453,7 +472,6 @@ while True:
                     ])
                 )
 
-                # Update card state
                 card["position"] = (
                     avg_x,
                     avg_y
@@ -511,11 +529,9 @@ while True:
 
         for marker_id, card in cards.items():
 
-            # Card isn't currently visible
             if not card["visible"]:
                 continue
 
-            # A cards are tracked but don't create circles
             if card["type"] == "a":
                 continue
 
@@ -526,7 +542,6 @@ while True:
 
             x, y = position
 
-            # Black circle
             cv2.circle(
                 projection,
                 (x, y),
@@ -590,7 +605,7 @@ while True:
         y_position += 45
 
     # ========================================================
-    # SHOW CAMERA
+    # CAMERA PREVIEW
     # ========================================================
 
     cv2.imshow(
@@ -599,7 +614,7 @@ while True:
     )
 
     # ========================================================
-    # SHOW PROJECTION
+    # PROJECTOR
     # ========================================================
 
     cv2.imshow(
@@ -613,25 +628,15 @@ while True:
 
     key = cv2.waitKey(1) & 0xFF
 
-    # --------------------------------------------------------
-    # QUIT
-    # --------------------------------------------------------
-
     if key == ord("q"):
         break
-
-    # --------------------------------------------------------
-    # PAUSE / PLAY
-    # --------------------------------------------------------
 
     elif key == ord(" "):
 
         if game_paused:
 
-            # Resume
             game_paused = False
 
-            # Start a fresh 10-second period
             next_scoring_time = (
                 time.time()
                 + SCORING_INTERVAL
@@ -641,21 +646,15 @@ while True:
 
         else:
 
-            # Pause
             game_paused = True
 
             print("Game paused")
-
-    # --------------------------------------------------------
-    # RESET SCORES
-    # --------------------------------------------------------
 
     elif key == ord("r"):
 
         for team in range(1, NUM_TEAMS + 1):
             scores[team] = 0
 
-        # Reset timer
         next_scoring_time = (
             time.time()
             + SCORING_INTERVAL
@@ -667,6 +666,10 @@ while True:
 # ============================================================
 # CLEANUP
 # ============================================================
+
+camera_running = False
+
+camera_thread.join(timeout=1)
 
 cap.release()
 
