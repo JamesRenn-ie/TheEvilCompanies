@@ -1,41 +1,122 @@
 import cv2
 import numpy as np
+import math
 
 dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
 
-# A4 at 300 DPI
+# ============================================================
+# A4 / PRINT SETTINGS
+# ============================================================
+
 DPI = 300
+
 A4_W = int(8.27 * DPI)
 A4_H = int(11.69 * DPI)
 
 # Marker size: 30 mm
 marker_size = int(30 / 25.4 * DPI)
 
+# Markers per page
 cols = 5
 rows = 8
+markers_per_page = cols * rows
 
-# Calculate equal spacing
-margin_x = (A4_W - cols * marker_size) // (cols + 1)
-margin_y = (A4_H - rows * marker_size) // (rows + 1)
+# Marker IDs to generate
+START_ID = 4
+END_ID = 96
 
-sheet = np.ones((A4_H, A4_W), dtype=np.uint8) * 255
+marker_ids = list(range(START_ID, END_ID + 1))
 
-for marker_id in range(40):
-    marker = cv2.aruco.generateImageMarker(
-        dictionary,
-        marker_id,
-        marker_size
+# ============================================================
+# CALCULATE NUMBER OF PAGES
+# ============================================================
+
+num_pages = math.ceil(len(marker_ids) / markers_per_page)
+
+print(f"Generating {len(marker_ids)} markers")
+print(f"Pages required: {num_pages}")
+print(f"Marker size: {marker_size}px (~30mm)")
+
+# ============================================================
+# GENERATE EACH PAGE
+# ============================================================
+
+for page in range(num_pages):
+
+    page_ids = marker_ids[
+        page * markers_per_page:
+        (page + 1) * markers_per_page
+    ]
+
+    # White A4 page
+    sheet = np.ones((A4_H, A4_W), dtype=np.uint8) * 255
+
+    # Calculate spacing
+    margin_x = (A4_W - cols * marker_size) // (cols + 1)
+    margin_y = (A4_H - rows * marker_size) // (rows + 1)
+
+    for position, marker_id in enumerate(page_ids):
+
+        marker = cv2.aruco.generateImageMarker(
+            dictionary,
+            marker_id,
+            marker_size
+        )
+
+        row = position // cols
+        col = position % cols
+
+        x = margin_x + col * (marker_size + margin_x)
+        y = margin_y + row * (marker_size + margin_y)
+
+        # Place marker
+        sheet[
+            y:y + marker_size,
+            x:x + marker_size
+        ] = marker
+
+        # ----------------------------------------------------
+        # ID LABEL
+        # ----------------------------------------------------
+
+        label = str(marker_id)
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.2
+        thickness = 3
+
+        text_size = cv2.getTextSize(
+            label,
+            font,
+            font_scale,
+            thickness
+        )[0]
+
+        text_x = x + (marker_size - text_size[0]) // 2
+        text_y = y + marker_size + text_size[1] + 15
+
+        cv2.putText(
+            sheet,
+            label,
+            (text_x, text_y),
+            font,
+            font_scale,
+            0,
+            thickness,
+            cv2.LINE_AA
+        )
+
+    # ========================================================
+    # SAVE PAGE
+    # ========================================================
+
+    filename = f"aruco_40_96_page{page + 1}.png"
+
+    cv2.imwrite(filename, sheet)
+
+    print(
+        f"Saved {filename} "
+        f"(markers {page_ids[0]}-{page_ids[-1]})"
     )
 
-    row = marker_id // cols
-    col = marker_id % cols
-
-    x = margin_x + col * (marker_size + margin_x)
-    y = margin_y + row * (marker_size + margin_y)
-
-    sheet[y:y + marker_size, x:x + marker_size] = marker
-
-cv2.imwrite("aruco_40_a4.png", sheet)
-
-print("Saved aruco_40_a4.png")
-print(f"Marker size: {marker_size}px (~30mm)")
+print("Done.")
