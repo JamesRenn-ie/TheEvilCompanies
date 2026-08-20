@@ -32,11 +32,11 @@ NUM_TEAMS = 4
 # p = 2 per team
 #
 CARDS_PER_TEAM = {
-    "d": 10,
-    "a": 5,
-    "l": 5,
-    "b": 2,
-    "p": 2,
+    "d": 20,
+    "a": 10,
+    "l": 10,
+    "b": 3,
+    "p": 1,
 }
 
 # First ArUco ID used for cards

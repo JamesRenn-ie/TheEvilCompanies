@@ -326,8 +326,7 @@ def render_map(time):
 
     combined.blit(
         land_surface,
-        (0, 0),
-        special_flags=pygame.BLEND_RGBA_ALPHA
+        (0, 0)
     )
 
     draw_land_details(combined)
@@ -338,7 +337,7 @@ def render_map(time):
         (SCREEN_WIDTH, SCREEN_HEIGHT)
     )
 
-    return final_map
+    return final_map``
 
 
 # ============================================================
