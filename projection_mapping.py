@@ -23,9 +23,7 @@ CALIBRATION_IDS = [0, 1, 2, 3]
 
 NUM_TEAMS = 4
 
-# Number of each card type PER TEAM.
-#
-# Change these values to change the number of cards.
+# Number of each card type PER TEAM
 #
 # d = 10 per team
 # a = 5 per team
@@ -41,37 +39,25 @@ CARDS_PER_TEAM = {
     "p": 2,
 }
 
-# First ArUco ID used for cards.
-# 0, 1, 2, 3 are reserved for calibration.
+# First ArUco ID used for cards
 START_CARD_ID = 4
 
-# Circle radius for cards
+# Circle radius
 CIRCLE_RADIUS = 80
 
 # Position smoothing
-SMOOTHING_TIME = 0.1  # seconds
+SMOOTHING_TIME = 0.2  # seconds
 
-# How long to keep a card visible after detection is lost
+# How long a card remains visible after detection is lost
 MARKER_TIMEOUT = 0.5  # seconds
+
+# Time between scoring events
+SCORING_INTERVAL = 10.0  # seconds
 
 
 # ============================================================
 # GENERATE CARD ASSIGNMENTS
 # ============================================================
-
-# Each physical ArUco marker gets assigned:
-#
-#   team
-#   card type
-#
-# Example:
-#
-#   ArUco 4  -> Team 1, card d
-#   ArUco 5  -> Team 1, card d
-#   ...
-#   ArUco 14 -> Team 1, card a
-#
-# The IDs are generated automatically from the configuration.
 
 CARD_ASSIGNMENTS = {}
 
@@ -91,8 +77,12 @@ for team in range(1, NUM_TEAMS + 1):
             marker_id += 1
 
 
-# All interactive marker IDs
 INTERACTIVE_IDS = list(CARD_ASSIGNMENTS.keys())
+
+
+# ============================================================
+# PRINT CARD ASSIGNMENTS
+# ============================================================
 
 print("\nCard assignments:")
 print("-----------------")
@@ -133,6 +123,16 @@ cards = {
 position_histories = {
     marker_id: deque()
     for marker_id in INTERACTIVE_IDS
+}
+
+
+# ============================================================
+# SCORES
+# ============================================================
+
+scores = {
+    team: 0
+    for team in range(1, NUM_TEAMS + 1)
 }
 
 
@@ -279,6 +279,53 @@ def transform_point(point, H):
 
 
 # ============================================================
+# SCORING
+# ============================================================
+
+def score_visible_cards():
+    """
+    Give each team one point for every currently visible
+    card that creates a circle.
+
+    'a' cards do not create circles and therefore do not score.
+    """
+
+    points_awarded = {
+        team: 0
+        for team in range(1, NUM_TEAMS + 1)
+    }
+
+    for card in cards.values():
+
+        # A cards do not create circles
+        if card["type"] == "a":
+            continue
+
+        # Only visible cards score
+        if not card["visible"]:
+            continue
+
+        team = card["team"]
+
+        scores[team] += 1
+        points_awarded[team] += 1
+
+    return points_awarded
+
+
+# ============================================================
+# START GAME TIMER
+# ============================================================
+
+game_start_time = time.time()
+
+next_scoring_time = (
+    game_start_time
+    + SCORING_INTERVAL
+)
+
+
+# ============================================================
 # MAIN LOOP
 # ============================================================
 
@@ -292,17 +339,17 @@ while True:
 
     current_time = time.time()
 
-    # --------------------------------------------------------
-    # Detect ArUco markers
-    # --------------------------------------------------------
+    # ========================================================
+    # DETECT ARUCO MARKERS
+    # ========================================================
 
     corners, ids, rejected = detector.detectMarkers(
         frame
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # BLUE BACKGROUND
-    # --------------------------------------------------------
+    # ========================================================
 
     projection = np.zeros(
         (
@@ -315,9 +362,9 @@ while True:
 
     projection[:] = (255, 0, 0)
 
-    # --------------------------------------------------------
-    # Process detections
-    # --------------------------------------------------------
+    # ========================================================
+    # PROCESS DETECTIONS
+    # ========================================================
 
     if ids is not None:
 
@@ -329,7 +376,7 @@ while True:
         )
 
         # ----------------------------------------------------
-        # Update calibration
+        # UPDATE CALIBRATION
         # ----------------------------------------------------
 
         new_H = calculate_homography(
@@ -341,7 +388,7 @@ while True:
             H = new_H
 
         # ----------------------------------------------------
-        # Process cards
+        # TRACK CARDS
         # ----------------------------------------------------
 
         if H is not None:
@@ -353,33 +400,24 @@ while True:
 
                 marker_id = int(marker_id)
 
-                # Ignore anything that isn't one of our cards
+                # Ignore unknown markers
                 if marker_id not in cards:
                     continue
 
                 card = cards[marker_id]
 
-                # --------------------------------------------
-                # Find camera position
-                # --------------------------------------------
-
+                # Camera position
                 camera_position = marker_center(
                     marker_corners
                 )
 
-                # --------------------------------------------
                 # Convert to projector position
-                # --------------------------------------------
-
                 x, y = transform_point(
                     camera_position,
                     H
                 )
 
-                # --------------------------------------------
                 # Add position to history
-                # --------------------------------------------
-
                 history = position_histories[
                     marker_id
                 ]
@@ -400,10 +438,7 @@ while True:
                 ):
                     history.popleft()
 
-                # --------------------------------------------
                 # Average recent positions
-                # --------------------------------------------
-
                 avg_x = int(
                     np.mean([
                         position[1]
@@ -418,10 +453,7 @@ while True:
                     ])
                 )
 
-                # --------------------------------------------
                 # Update card state
-                # --------------------------------------------
-
                 card["position"] = (
                     avg_x,
                     avg_y
@@ -451,6 +483,26 @@ while True:
             card["visible"] = False
 
     # ========================================================
+    # SCORING TIMER
+    # ========================================================
+
+    while current_time >= next_scoring_time:
+
+        points_awarded = score_visible_cards()
+
+        print("\n--- SCORING ---")
+
+        for team in range(1, NUM_TEAMS + 1):
+
+            print(
+                f"Team {team}: "
+                f"+{points_awarded[team]} "
+                f"(total {scores[team]})"
+            )
+
+        next_scoring_time += SCORING_INTERVAL
+
+    # ========================================================
     # DRAW CARDS
     # ========================================================
 
@@ -458,10 +510,11 @@ while True:
 
         for marker_id, card in cards.items():
 
+            # Card isn't currently visible
             if not card["visible"]:
                 continue
 
-            # A cards are tracked but do not create circles
+            # A cards are tracked but don't create circles
             if card["type"] == "a":
                 continue
 
@@ -472,9 +525,9 @@ while True:
 
             x, y = position
 
-            # --------------------------------------------
-            # Black circle
-            # --------------------------------------------
+            # ------------------------------------------------
+            # BLACK CIRCLE
+            # ------------------------------------------------
 
             cv2.circle(
                 projection,
@@ -484,60 +537,20 @@ while True:
                 -1
             )
 
-            # --------------------------------------------
-            # Display card information
-            # --------------------------------------------
-
-            label = (
-                f"T{card['team']} "
-                f"{card['type']}"
-            )
-
-            cv2.putText(
-                projection,
-                label,
-                (x - 35, y + 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA
-            )
-
     # ========================================================
-    # CALCULATE BLUE REMOVED
+    # TIMER
     # ========================================================
 
-    black_mask = cv2.inRange(
-        projection,
-        np.array([0, 0, 0]),
-        np.array([0, 0, 0])
+    time_remaining = max(
+        0,
+        next_scoring_time - current_time
     )
 
-    black_pixels = cv2.countNonZero(
-        black_mask
-    )
-
-    total_pixels = (
-        PROJECTOR_WIDTH
-        * PROJECTOR_HEIGHT
-    )
-
-    percentage_removed = (
-        black_pixels
-        / total_pixels
-        * 100
-    )
-
-    # ========================================================
-    # DISPLAY OVERALL PERCENTAGE
-    # ========================================================
-
-    text = f"{percentage_removed:.1f}%"
+    timer_text = f"{time_remaining:.1f}"
 
     cv2.putText(
         projection,
-        text,
+        timer_text,
         (30, 60),
         cv2.FONT_HERSHEY_SIMPLEX,
         1.5,
@@ -547,29 +560,16 @@ while True:
     )
 
     # ========================================================
-    # DISPLAY CARD COUNTS
+    # DISPLAY SCORES
     # ========================================================
 
-    # Count currently visible cards by team
-
-    team_counts = {
-        team: 0
-        for team in range(1, NUM_TEAMS + 1)
-    }
-
-    for card in cards.values():
-
-        if card["visible"]:
-            team_counts[card["team"]] += 1
-
-    # Display team counts
-    y_position = 100
+    y_position = 110
 
     for team in range(1, NUM_TEAMS + 1):
 
         text = (
             f"Team {team}: "
-            f"{team_counts[team]} cards"
+            f"{scores[team]}"
         )
 
         cv2.putText(
@@ -577,13 +577,13 @@ while True:
             text,
             (30, y_position),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            1.0,
             (255, 255, 255),
             2,
             cv2.LINE_AA
         )
 
-        y_position += 35
+        y_position += 45
 
     # ========================================================
     # SHOW CAMERA
