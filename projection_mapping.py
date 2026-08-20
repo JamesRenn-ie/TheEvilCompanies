@@ -137,6 +137,18 @@ scores = {
 
 
 # ============================================================
+# GAME STATE
+# ============================================================
+
+game_paused = False
+
+next_scoring_time = (
+    time.time()
+    + SCORING_INTERVAL
+)
+
+
+# ============================================================
 # ARUCO SETUP
 # ============================================================
 
@@ -314,18 +326,6 @@ def score_visible_cards():
 
 
 # ============================================================
-# START GAME TIMER
-# ============================================================
-
-game_start_time = time.time()
-
-next_scoring_time = (
-    game_start_time
-    + SCORING_INTERVAL
-)
-
-
-# ============================================================
 # MAIN LOOP
 # ============================================================
 
@@ -460,7 +460,6 @@ while True:
                 )
 
                 card["last_seen"] = current_time
-
                 card["visible"] = True
 
     # ========================================================
@@ -483,24 +482,26 @@ while True:
             card["visible"] = False
 
     # ========================================================
-    # SCORING TIMER
+    # SCORING
     # ========================================================
 
-    while current_time >= next_scoring_time:
+    if not game_paused:
 
-        points_awarded = score_visible_cards()
+        while current_time >= next_scoring_time:
 
-        print("\n--- SCORING ---")
+            points_awarded = score_visible_cards()
 
-        for team in range(1, NUM_TEAMS + 1):
+            print("\n--- SCORING ---")
 
-            print(
-                f"Team {team}: "
-                f"+{points_awarded[team]} "
-                f"(total {scores[team]})"
-            )
+            for team in range(1, NUM_TEAMS + 1):
 
-        next_scoring_time += SCORING_INTERVAL
+                print(
+                    f"Team {team}: "
+                    f"+{points_awarded[team]} "
+                    f"(total {scores[team]})"
+                )
+
+            next_scoring_time += SCORING_INTERVAL
 
     # ========================================================
     # DRAW CARDS
@@ -525,10 +526,7 @@ while True:
 
             x, y = position
 
-            # ------------------------------------------------
-            # BLACK CIRCLE
-            # ------------------------------------------------
-
+            # Black circle
             cv2.circle(
                 projection,
                 (x, y),
@@ -541,12 +539,18 @@ while True:
     # TIMER
     # ========================================================
 
-    time_remaining = max(
-        0,
-        next_scoring_time - current_time
-    )
+    if game_paused:
 
-    timer_text = f"{time_remaining:.1f}"
+        timer_text = "PAUSED"
+
+    else:
+
+        time_remaining = max(
+            0,
+            next_scoring_time - current_time
+        )
+
+        timer_text = f"{time_remaining:.1f}"
 
     cv2.putText(
         projection,
@@ -609,8 +613,55 @@ while True:
 
     key = cv2.waitKey(1) & 0xFF
 
+    # --------------------------------------------------------
+    # QUIT
+    # --------------------------------------------------------
+
     if key == ord("q"):
         break
+
+    # --------------------------------------------------------
+    # PAUSE / PLAY
+    # --------------------------------------------------------
+
+    elif key == ord(" "):
+
+        if game_paused:
+
+            # Resume
+            game_paused = False
+
+            # Start a fresh 10-second period
+            next_scoring_time = (
+                time.time()
+                + SCORING_INTERVAL
+            )
+
+            print("Game resumed")
+
+        else:
+
+            # Pause
+            game_paused = True
+
+            print("Game paused")
+
+    # --------------------------------------------------------
+    # RESET SCORES
+    # --------------------------------------------------------
+
+    elif key == ord("r"):
+
+        for team in range(1, NUM_TEAMS + 1):
+            scores[team] = 0
+
+        # Reset timer
+        next_scoring_time = (
+            time.time()
+            + SCORING_INTERVAL
+        )
+
+        print("Scores reset")
 
 
 # ============================================================
