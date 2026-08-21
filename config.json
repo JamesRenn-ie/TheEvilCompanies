@@ -33,11 +33,11 @@
     "num_teams": 4,
     "start_card_id": 4,
     "cards_per_team": {
-      "d": 10,
-      "a": 5,
-      "l": 5,
-      "b": 2,
-      "p": 2
+      "d": 20,
+      "a": 10,
+      "l": 10,
+      "b": 3,
+      "p": 1
     }
   },
   "gameplay": {
