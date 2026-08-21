@@ -1,8 +1,21 @@
-import cv2
-import numpy as np
+import os
+import sys
 import math
 
-dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+import cv2
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src import config as config_loader
+from src.card_assignments import build_card_assignments
+
+cfg = config_loader.load_config()
+
+aruco_dictionary_name = cfg.raw["camera"]["aruco_dictionary"]
+dictionary = cv2.aruco.getPredefinedDictionary(
+    getattr(cv2.aruco, aruco_dictionary_name)
+)
 
 # ============================================================
 # A4 / PRINT SETTINGS
@@ -21,11 +34,11 @@ cols = 5
 rows = 8
 markers_per_page = cols * rows
 
-# Marker IDs to generate
-START_ID = 4
-END_ID = 96
-
-marker_ids = list(range(START_ID, END_ID + 1))
+# Marker IDs to generate - derived from config.json so this can never
+# drift out of sync with what main.py actually assigns.
+marker_ids = sorted(
+    build_card_assignments(cfg.raw["cards"]).keys()
+)
 
 # ============================================================
 # CALCULATE NUMBER OF PAGES
@@ -110,7 +123,7 @@ for page in range(num_pages):
     # SAVE PAGE
     # ========================================================
 
-    filename = f"aruco_40_96_page{page + 1}.png"
+    filename = f"aruco_{marker_ids[0]}_{marker_ids[-1]}_page{page + 1}.png"
 
     cv2.imwrite(filename, sheet)
 

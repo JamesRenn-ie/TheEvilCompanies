@@ -1,0 +1,90 @@
+{
+  "projector_profiles": [
+    {
+      "name": "1280x720_camera_rig",
+      "width": 1280,
+      "height": 720,
+      "data_centre_radius": 80,
+      "active": true
+    },
+    {
+      "name": "1920x1080_full_hd",
+      "width": 1920,
+      "height": 1080,
+      "data_centre_radius": 180,
+      "active": false
+    }
+  ],
+  "camera": {
+    "source": "phone",
+    "phone": {
+      "ip": "10.34.201.200",
+      "port": 8080,
+      "path": "/video"
+    },
+    "webcam": {
+      "device_index": 0
+    },
+    "calibration_ids": [0, 1, 2, 3],
+    "homography_recompute_every_frame": false,
+    "aruco_dictionary": "DICT_6X6_250"
+  },
+  "cards": {
+    "num_teams": 4,
+    "start_card_id": 4,
+    "cards_per_team": {
+      "d": 10,
+      "a": 5,
+      "l": 5,
+      "b": 2,
+      "p": 2
+    }
+  },
+  "gameplay": {
+    "mode": "static",
+    "sequence_mode": "facilitated",
+    "stack_distance": 70,
+    "smoothing_time": 0.05,
+    "marker_timeout": 0.15,
+    "scoring_interval": 10.0,
+    "target_fps": 30,
+    "radius_growth_rate": 30,
+    "min_radius": 10,
+    "cue_2_threshold": 33,
+    "cue_3_threshold": 66,
+    "completion_percentage": 98
+  },
+  "colours": {
+    "water_rgb": [20, 110, 180],
+    "land_rgb": [85, 160, 80],
+    "team_rgb": [
+      [200, 60, 60],
+      [60, 120, 200],
+      [220, 190, 60],
+      [120, 70, 190]
+    ]
+  },
+  "audio": {
+    "sfx": {
+      "num_mixer_channels": 16,
+      "default_priority": 1,
+      "default_volume": 0.5,
+      "events": {
+        "datacenter":  { "priority": 1, "volume": 0.4 },
+        "activist":    { "priority": 1, "volume": 0.4 },
+        "lawyer":      { "priority": 1, "volume": 0.4 },
+        "billionaire": { "priority": 2, "volume": 0.7 },
+        "president":   { "priority": 3, "volume": 1.0 }
+      }
+    },
+    "music": {
+      "volume": null,
+      "duck_multiplier": 0.7,
+      "duck_fade_in_seconds": 0.2
+    }
+  },
+  "debug": {
+    "show_marker_positions": true,
+    "show_camera_preview": true
+  }
+}

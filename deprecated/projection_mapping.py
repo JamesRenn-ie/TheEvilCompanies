@@ -29,7 +29,6 @@ CARDS_PER_TEAM = {
     "p": 1,
 }
 
-<<<<<<< HEAD
 # ------------------------------------------------------------
 # Map this script's short card-type codes to the sfx event_type
 # names used by audio_manager (which match sfx/ filename prefixes).
@@ -43,8 +42,6 @@ CARD_TYPE_TO_SFX_EVENT = {
 }
 
 # First ArUco ID used for cards
-=======
->>>>>>> ff94f56a5e9c2f33587ab69e9180e78cb64d91f3
 START_CARD_ID = 4
 
 CIRCLE_RADIUS = 80
@@ -449,12 +446,9 @@ while True:
 
                 card = cards[marker_id]
 
-<<<<<<< HEAD
                 was_visible = card["visible"]
 
                 # Camera position
-=======
->>>>>>> ff94f56a5e9c2f33587ab69e9180e78cb64d91f3
                 camera_position = marker_center(
                     marker_corners
                 )

@@ -337,7 +337,7 @@ def render_map(time):
         (SCREEN_WIDTH, SCREEN_HEIGHT)
     )
 
-    return final_map``
+    return final_map
 
 
 # ============================================================
