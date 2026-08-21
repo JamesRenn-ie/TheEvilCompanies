@@ -596,6 +596,12 @@ while running:
 
                     print("Game paused")
 
+            elif event.key == pygame.K_c:
+
+                H = None
+
+                print("Recalibrating - show all calibration markers to the camera")
+
             elif event.key == pygame.K_r:
 
                 reset_game_state()

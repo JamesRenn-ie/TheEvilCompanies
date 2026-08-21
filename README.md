@@ -22,6 +22,7 @@ malformed or invalid config fails immediately with a clear error
 |---------|--------|
 | `SPACE` | Facilitated mode: pause/resume the game. Automatic mode: starts the game from the pre-game screen; once running, pauses/resumes it the same way. |
 | `R`     | Facilitated mode: reset scores and card ownership, game keeps running/paused as it was. Automatic mode: send the game all the way back to the pre-game "Everything's Computer" screen. |
+| `C`     | Recalibrate: forget the current camera-to-projector homography and show "WAITING FOR CALIBRATION" until all `camera.calibration_ids` are seen together again. Cards keep tracking with the old homography for up to `marker_timeout` seconds, then stop until recalibration completes. Use this any time the camera or projector has moved. |
 | `Q`     | Quit. |
 
 ## config.json reference
