@@ -356,6 +356,26 @@ def apply_pending_music_command():
         audio.play_music(name, loop=loop)
 
 
+def resync_scoring_deadline(now):
+    """
+    Fast-forward next_scoring_time past `now` in whole SCORING_INTERVAL
+    steps, without awarding points for any skipped ticks.
+
+    Used when resuming from a manual pause: the music track is never
+    stopped by a pause, so its chimes keep sounding on their original
+    schedule. Snapping the deadline to "now + SCORING_INTERVAL" would
+    pull the on-screen countdown out of phase with those chimes: this
+    keeps it phase-locked to whenever the track actually started
+    instead, while still avoiding a burst of catch-up scoring ticks if
+    the pause lasted longer than one interval.
+    """
+
+    global next_scoring_time
+
+    while next_scoring_time <= now:
+        next_scoring_time += SCORING_INTERVAL
+
+
 def get_latest_frame():
 
     global latest_frame
@@ -393,6 +413,11 @@ if DEBUG_SHOW_CAMERA_PREVIEW:
 # ============================================================
 
 H = None
+
+# Marker IDs we've already warned about once (neither a calibration ID
+# nor a card ID) - printed once each rather than every frame, since a
+# stray/misprinted marker would otherwise spam the console.
+unrecognized_marker_ids_warned = set()
 
 
 def marker_center(corners):
@@ -549,10 +574,9 @@ while running:
 
                     if sequence_controller.should_score:
 
-                        next_scoring_time = (
-                            time.time()
-                            + SCORING_INTERVAL
-                        )
+                        # Resuming, not (re-)starting the track - stay
+                        # phase-locked to its original start time.
+                        resync_scoring_deadline(time.time())
 
                     print(f"Automatic mode: SPACE ({sequence_controller.state})")
 
@@ -560,10 +584,9 @@ while running:
 
                     game_paused = False
 
-                    next_scoring_time = (
-                        time.time()
-                        + SCORING_INTERVAL
-                    )
+                    # Resuming, not (re-)starting the track - stay
+                    # phase-locked to its original start time.
+                    resync_scoring_deadline(time.time())
 
                     print("Game resumed")
 
@@ -586,6 +609,15 @@ while running:
 
                     sequence_controller.on_reset_pressed()
                     audio.stop_music()
+
+                else:
+
+                    # Force the facilitated cue-selection block below to
+                    # treat this as a fresh track start (not just a
+                    # continuation) so the timer resync stays tied to
+                    # when the music actually restarts.
+                    audio.stop_music()
+                    current_music_cue = None
 
                 print("Game reset")
 
@@ -640,6 +672,18 @@ while running:
                     continue
 
                 if marker_id not in cards:
+
+                    if marker_id not in unrecognized_marker_ids_warned:
+
+                        unrecognized_marker_ids_warned.add(marker_id)
+
+                        print(
+                            f"ArUco {marker_id} detected but is not a "
+                            f"calibration ID or an assigned card ID - "
+                            f"it will never affect the game "
+                            f"(see Card assignments above)"
+                        )
+
                     continue
 
                 card = cards[marker_id]
@@ -817,6 +861,12 @@ while running:
             audio.play_music(target_cue, loop=True)
             current_music_cue = target_cue
 
+            # The new cue restarts from sample 0 this exact frame -
+            # resync the countdown to it so it starts exactly when the
+            # music starts, instead of drifting from whenever the
+            # *previous* cue (or the script itself) happened to start.
+            next_scoring_time = current_time + SCORING_INTERVAL
+
         if (
             not completion_pause_triggered
             and coverage_percentage >= COMPLETION_PERCENTAGE
@@ -931,6 +981,25 @@ while running:
             disconnected_surface,
             (
                 (PROJECTOR_WIDTH - disconnected_surface.get_width()) // 2,
+                20
+            )
+        )
+
+    elif H is None:
+
+        # No card is ever tracked (so no Data Centre radius, or
+        # anything else, is ever drawn) until all of
+        # camera.calibration_ids have been seen in the same frame -
+        # make that state visible instead of silently doing nothing.
+
+        calibrating_surface = timer_font.render(
+            "WAITING FOR CALIBRATION", True, (255, 200, 60)
+        )
+
+        screen.blit(
+            calibrating_surface,
+            (
+                (PROJECTOR_WIDTH - calibrating_surface.get_width()) // 2,
                 20
             )
         )

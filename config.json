@@ -16,7 +16,7 @@
     }
   ],
   "camera": {
-    "source": "phone",
+    "source": "webcam",
     "phone": {
       "ip": "10.34.201.200",
       "port": 8080,
