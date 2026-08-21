@@ -106,22 +106,38 @@ def find_stacks(cards, stack_distance):
 
 def apply_billionaire_steals(stacks):
     """
-    A Billionaire stacked with an unlocked, unblocked Data Centre owned
-    by a different team steals it (owner_team = billionaire's team).
-    Not locked - stays normally contestable afterward.
+    A Billionaire stacked with an unlocked Data Centre owned by a
+    different team steals it (owner_team = billionaire's team) and
+    marks it billionaire_reactivated, so an unlawyered Activist in the
+    same stack no longer blocks it (see rebuild_map/update_growth_radii/
+    score_visible_cards, which all check this flag). Not locked - stays
+    normally contestable afterward.
+
+    billionaire_reactivated is a persistent flag, not re-derived fresh
+    every frame, because a successful steal makes owner_team equal the
+    Billionaire's own team immediately - re-deriving "different team"
+    live every frame would only ever be true for the single frame the
+    steal happens, then flip back to blocked next frame even though the
+    Billionaire is still physically there. Instead it stays True for as
+    long as a Billionaire belonging to the Data Centre's (now-matching)
+    owning team remains in the stack, and only resets to False once no
+    such Billionaire remains - at which point an unlawyered Activist
+    resumes blocking it.
 
     Safe to call every frame: once a Data Centre's owner_team already
-    matches the Billionaire's team, the condition is false and nothing
-    happens - so this reads as a one-time transfer without needing
-    explicit edge-triggering.
+    matches the Billionaire's team, stealing is a no-op - but
+    billionaire_reactivated is independently re-derived every frame
+    from presence, per the persistence rule above.
     """
 
     for stack in stacks:
 
-        data_centres, billionaires, _, blocked = compute_stack_flags(stack)
+        data_centres, billionaires, _, _ = compute_stack_flags(stack)
 
-        if not data_centres or not billionaires or blocked:
+        if not data_centres:
             continue
+
+        stolen_this_frame = set()
 
         for billionaire in billionaires:
 
@@ -134,6 +150,24 @@ def apply_billionaire_steals(stacks):
                     continue
 
                 data_centre["owner_team"] = billionaire["team"]
+                stolen_this_frame.add(data_centre["id"])
+
+        for data_centre in data_centres:
+
+            if data_centre["locked"]:
+                data_centre["billionaire_reactivated"] = False
+
+            elif data_centre["id"] in stolen_this_frame:
+                data_centre["billionaire_reactivated"] = True
+
+            elif any(
+                billionaire["team"] == data_centre["owner_team"]
+                for billionaire in billionaires
+            ):
+                pass  # a Billionaire of the matching team is still here - keep prior state
+
+            else:
+                data_centre["billionaire_reactivated"] = False
 
 
 def _claim(data_centre, team):
@@ -202,6 +236,10 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
       the component size it WOULD have if it were unblocked - computed
       fresh every frame so the shrink rate naturally declines as the
       circle separates from its former cluster. Floored at min_radius.
+    - A locked (President-claimed) or billionaire_reactivated Data
+      Centre is exempt from all of the above even if its stack would
+      otherwise be blocked: it grows/holds like a normal unblocked Data
+      Centre, resuming from whatever radius it currently has.
     """
 
     visible_dcs = [
@@ -219,8 +257,15 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
 
         data_centres, _, _, blocked = compute_stack_flags(stack)
 
-        if blocked:
-            blocked_ids.update(dc["id"] for dc in data_centres)
+        if not blocked:
+            continue
+
+        for dc in data_centres:
+
+            if dc["locked"] or dc.get("billionaire_reactivated", False):
+                continue
+
+            blocked_ids.add(dc["id"])
 
     def touches(card_a, card_b):
         return circles_touch(card_a, card_b)
@@ -348,7 +393,9 @@ def rebuild_map(map_engine, stacks):
         Data Centre alone, or Data Centre + Activist + Lawyer -> land
         Data Centre + Activist (no Lawyer)                    -> water
         A locked Data Centre (President-claimed) is always land,
-        immune to the above.
+        immune to the above. A billionaire_reactivated Data Centre
+        (see apply_billionaire_steals) is also land despite the block,
+        for as long as that flag holds.
 
     Stacks are processed in a deterministic order (lowest marker ID
     first) rather than find_stacks()'s arbitrary set-iteration order,
@@ -372,7 +419,11 @@ def rebuild_map(map_engine, stacks):
 
             x, y = data_centre["position"]
 
-            terrain = 1 if (data_centre["locked"] or not blocked) else 0
+            terrain = 1 if (
+                data_centre["locked"]
+                or not blocked
+                or data_centre.get("billionaire_reactivated", False)
+            ) else 0
 
             map_engine.apply_circle(
                 x, y,
@@ -396,8 +447,15 @@ def score_visible_cards(cards, scores, num_teams, game_mode, stacks):
 
             data_centres, _, _, blocked = compute_stack_flags(stack)
 
-            if blocked:
-                blocked_dc_ids.update(dc["id"] for dc in data_centres)
+            if not blocked:
+                continue
+
+            for dc in data_centres:
+
+                if dc["locked"] or dc.get("billionaire_reactivated", False):
+                    continue
+
+                blocked_dc_ids.add(dc["id"])
 
     points_awarded = {team: 0 for team in range(1, num_teams + 1)}
 
@@ -493,7 +551,15 @@ class MapEngine:
         land_colour,
         mode="static",
         team_colours=None,
+        team_colours_enabled=None,
     ):
+        """
+        team_colours_enabled controls whether Data Centre land renders
+        in its owning team's colour instead of the flat `land_colour`:
+        None (default) - on in growth mode, off in static mode (the
+        original, mode-tied behaviour). True/False - always on/off,
+        regardless of `mode`.
+        """
 
         self.width = width
         self.height = height
@@ -507,6 +573,7 @@ class MapEngine:
             if team_colours
             else []
         )
+        self.team_colours_enabled = team_colours_enabled
 
         self.land_mask = np.zeros((self.height, self.width), dtype=np.uint8)
 
@@ -549,7 +616,13 @@ class MapEngine:
 
     def render(self):
 
-        if self.mode == "growth" and self.team_colours:
+        use_team_colours = (
+            self.team_colours_enabled
+            if self.team_colours_enabled is not None
+            else self.mode == "growth"
+        )
+
+        if use_team_colours and self.team_colours:
 
             image = np.tile(
                 self.water_colour[None, None, :],

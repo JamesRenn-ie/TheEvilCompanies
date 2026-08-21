@@ -73,6 +73,7 @@ colours_cfg = cfg.raw["colours"]
 WATER_COLOUR = colours_cfg["water_rgb"]
 LAND_COLOUR = colours_cfg["land_rgb"]
 TEAM_COLOURS = colours_cfg.get("team_rgb", [])
+TEAM_COLOURS_ENABLED = colours_cfg.get("team_colours_enabled")
 
 debug_cfg = cfg.raw["debug"]
 
@@ -152,6 +153,7 @@ def make_card_state(marker_id, data):
         "owner_team": data["team"],
         "locked": False,
         "radius": CIRCLE_RADIUS,
+        "billionaire_reactivated": False,
     }
 
 
@@ -197,6 +199,7 @@ def reset_game_state():
         card["owner_team"] = card["team"]
         card["locked"] = False
         card["radius"] = CIRCLE_RADIUS
+        card["billionaire_reactivated"] = False
 
     bonus_awarded = False
     completion_pause_triggered = False
@@ -397,6 +400,51 @@ def is_camera_connected():
 
 
 # ============================================================
+# LATEST-DETECTION ARUCO THREAD
+#
+# Mirrors the camera thread above: detectMarkers() can take longer
+# than one frame period, and the render loop must never stall waiting
+# on it - it always reads whatever detection is newest, never a queue.
+# ============================================================
+
+latest_detection = None
+detection_lock = threading.Lock()
+detection_running = True
+
+
+def aruco_detector_worker():
+
+    global latest_detection
+
+    while detection_running:
+
+        frame = get_latest_frame()
+
+        if frame is None:
+            time.sleep(0.001)
+            continue
+
+        corners, ids, _ = detector.detectMarkers(frame)
+
+        with detection_lock:
+            latest_detection = (corners, ids, time.time())
+
+
+detection_thread = threading.Thread(
+    target=aruco_detector_worker,
+    daemon=True
+)
+
+detection_thread.start()
+
+
+def get_latest_detection():
+
+    with detection_lock:
+        return latest_detection
+
+
+# ============================================================
 # CAMERA PREVIEW WINDOW (debug only)
 # ============================================================
 
@@ -505,8 +553,17 @@ pygame.font.init()
 pygame.display.set_caption("Projected Board Game")
 
 screen = pygame.display.set_mode(
-    (PROJECTOR_WIDTH, PROJECTOR_HEIGHT)
+    (PROJECTOR_WIDTH, PROJECTOR_HEIGHT),
+    pygame.RESIZABLE
 )
+
+# Everything is drawn onto this fixed-resolution surface, then
+# stretched to whatever size `screen` currently is right before
+# flipping - so the window can be freely dragged (for aligning the
+# projector against the table) without touching the homography/card-
+# tracking math, which stays in native PROJECTOR_WIDTH x
+# PROJECTOR_HEIGHT space throughout.
+render_surface = pygame.Surface((PROJECTOR_WIDTH, PROJECTOR_HEIGHT))
 
 clock = pygame.time.Clock()
 
@@ -517,6 +574,7 @@ map_engine = MapEngine(
     LAND_COLOUR,
     mode=GAME_MODE,
     team_colours=TEAM_COLOURS,
+    team_colours_enabled=TEAM_COLOURS_ENABLED,
 )
 
 timer_font = pygame.font.SysFont(None, 48)
@@ -559,6 +617,13 @@ while running:
         if event.type == pygame.QUIT:
 
             running = False
+
+        elif event.type == pygame.VIDEORESIZE:
+
+            screen = pygame.display.set_mode(
+                (event.w, event.h),
+                pygame.RESIZABLE
+            )
 
         elif event.type == pygame.KEYDOWN:
 
@@ -634,7 +699,12 @@ while running:
     # DETECT ARUCO MARKERS
     # ========================================================
 
-    corners, ids, rejected = detector.detectMarkers(frame)
+    detection = get_latest_detection()
+
+    if detection is None:
+        corners, ids, detection_time = None, None, current_time
+    else:
+        corners, ids, detection_time = detection
 
     if ids is not None:
 
@@ -702,7 +772,7 @@ while running:
 
                 history = position_histories[marker_id]
 
-                history.append((current_time, x, y))
+                history.append((detection_time, x, y))
 
                 while (
                     history
@@ -715,7 +785,7 @@ while running:
                 avg_y = int(np.mean([p[2] for p in history]))
 
                 card["position"] = (avg_x, avg_y)
-                card["last_seen"] = current_time
+                card["last_seen"] = detection_time
                 card["visible"] = True
 
                 should_play_sfx = (
@@ -822,7 +892,7 @@ while running:
 
     map_surface = map_engine.render()
 
-    screen.blit(map_surface, (0, 0))
+    render_surface.blit(map_surface, (0, 0))
 
     # ========================================================
     # SEQUENCE MODE / MUSIC
@@ -902,23 +972,23 @@ while running:
             if card["type"] == "d":
 
                 pygame.draw.circle(
-                    screen, (255, 255, 255), (x, y), 8
+                    render_surface, (255, 255, 255), (x, y), 8
                 )
 
                 pygame.draw.circle(
-                    screen, (255, 255, 255), (x, y), int(card["radius"]), 2
+                    render_surface, (255, 255, 255), (x, y), int(card["radius"]), 2
                 )
 
             elif card["type"] == "a":
 
                 pygame.draw.circle(
-                    screen, (255, 255, 0), (x, y), 6
+                    render_surface, (255, 255, 0), (x, y), 6
                 )
 
             elif card["type"] == "l":
 
                 pygame.draw.circle(
-                    screen, (255, 0, 255), (x, y), 6
+                    render_surface, (255, 0, 255), (x, y), 6
                 )
 
     # ========================================================
@@ -931,7 +1001,7 @@ while running:
             "Everything's Computer", True, (255, 255, 255)
         )
 
-        screen.blit(
+        render_surface.blit(
             pregame_surface,
             (
                 (PROJECTOR_WIDTH - pregame_surface.get_width()) // 2,
@@ -961,7 +1031,7 @@ while running:
             timer_text, True, (255, 255, 255)
         )
 
-        screen.blit(timer_surface, (30, 20))
+        render_surface.blit(timer_surface, (30, 20))
 
     y_position = 80
 
@@ -973,7 +1043,7 @@ while running:
             (255, 255, 255)
         )
 
-        screen.blit(score_surface, (30, y_position))
+        render_surface.blit(score_surface, (30, y_position))
 
         y_position += 40
 
@@ -983,7 +1053,7 @@ while running:
             "CAMERA DISCONNECTED", True, (255, 60, 60)
         )
 
-        screen.blit(
+        render_surface.blit(
             disconnected_surface,
             (
                 (PROJECTOR_WIDTH - disconnected_surface.get_width()) // 2,
@@ -1002,7 +1072,7 @@ while running:
             "WAITING FOR CALIBRATION", True, (255, 200, 60)
         )
 
-        screen.blit(
+        render_surface.blit(
             calibrating_surface,
             (
                 (PROJECTOR_WIDTH - calibrating_surface.get_width()) // 2,
@@ -1013,6 +1083,14 @@ while running:
     # ========================================================
     # FLIP DISPLAY / CAMERA PREVIEW
     # ========================================================
+
+    # Stretch the fixed-resolution render onto however big the window
+    # currently is - may skew the aspect ratio on a non-proportional
+    # resize, matching the old cv2-window prototype's behaviour.
+    screen.blit(
+        pygame.transform.scale(render_surface, screen.get_size()),
+        (0, 0)
+    )
 
     pygame.display.flip()
 
@@ -1029,8 +1107,10 @@ while running:
 # ============================================================
 
 camera_running = False
+detection_running = False
 
 camera_thread.join(timeout=1)
+detection_thread.join(timeout=1)
 
 cap.release()
 

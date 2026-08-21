@@ -162,14 +162,39 @@ class Config:
             require_positive("radius_growth_rate")
             require_positive("min_radius")
 
+        colours_cfg = self._data.get("colours", {})
+        team_colours_enabled = colours_cfg.get("team_colours_enabled")
+
+        if (
+            team_colours_enabled is not None
+            and not isinstance(team_colours_enabled, bool)
+        ):
+            raise ConfigError(
+                f"config.json ({self.path}): colours.team_colours_enabled "
+                f"must be null, true, or false, got {team_colours_enabled!r}."
+            )
+
+        # null (the default) preserves the original mode-tied behaviour -
+        # team colours only in growth mode. true/false forces them on/off
+        # regardless of mode. Only validate colours.team_rgb's length when
+        # team colours will actually be rendered under that resolution.
+        team_colours_will_render = (
+            team_colours_enabled
+            if team_colours_enabled is not None
+            else mode == "growth"
+        )
+
+        if team_colours_will_render:
+
             num_teams = self._data.get("cards", {}).get("num_teams")
-            team_rgb = self._data.get("colours", {}).get("team_rgb", [])
+            team_rgb = colours_cfg.get("team_rgb", [])
 
             if len(team_rgb) != num_teams:
                 raise ConfigError(
-                    f"config.json ({self.path}): gameplay.mode is "
-                    f"\"growth\", so colours.team_rgb must have exactly "
-                    f"one entry per team (cards.num_teams={num_teams}), "
+                    f"config.json ({self.path}): team colours are enabled "
+                    f"(colours.team_colours_enabled={team_colours_enabled!r}, "
+                    f"gameplay.mode={mode!r}), so colours.team_rgb must have "
+                    f"exactly one entry per team (cards.num_teams={num_teams}), "
                     f"got {len(team_rgb)}."
                 )
 

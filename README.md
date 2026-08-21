@@ -92,8 +92,9 @@ exact same logic, so the two can never drift apart.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `water_rgb`, `land_rgb` | `[r, g, b]` (0-255) | Base colours for water/land. In growth mode, `land_rgb` is unused (each team's land uses its own `team_rgb` colour instead); it's still used for the "any land" flat colouring in static mode. |
-| `team_rgb` | list of `[r, g, b]` | Growth mode only. One colour per team, in team order (team 1 first). Length must exactly equal `cards.num_teams`. |
+| `water_rgb`, `land_rgb` | `[r, g, b]` (0-255) | Base colours for water/land, used whenever team colours (below) aren't in effect. |
+| `team_colours_enabled` | `true` / `false` / `null` | Whether a Data Centre's land renders in its owning team's `team_rgb` colour instead of the flat `land_rgb`. `null` (default) preserves the original behaviour: on in growth mode, off in static mode. `true`/`false` forces it on/off regardless of `gameplay.mode`. |
+| `team_rgb` | list of `[r, g, b]` | Required (and validated) only when team colours will actually render under the resolution above. One colour per team, in team order (team 1 first); length must exactly equal `cards.num_teams`. |
 
 ### `audio.sfx`
 

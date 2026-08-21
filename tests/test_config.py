@@ -137,6 +137,51 @@ def test_growth_mode_requires_team_rgb_length_to_match_num_teams():
         config.validate_gameplay()
 
 
+def test_static_mode_does_not_require_team_rgb_by_default():
+
+    data = make_valid_data("static")
+    del data["colours"]["team_rgb"]  # team colours never render in static mode by default
+
+    config = Config(data, path="<test>")
+
+    config.validate_gameplay()  # should not raise
+
+
+def test_team_colours_enabled_true_requires_team_rgb_even_in_static_mode():
+
+    data = make_valid_data("static")
+    data["colours"]["team_colours_enabled"] = True
+    data["colours"]["team_rgb"] = [[1, 0, 0]]  # only 1, but num_teams=4
+
+    config = Config(data, path="<test>")
+
+    with pytest.raises(ConfigError):
+        config.validate_gameplay()
+
+
+def test_team_colours_enabled_false_skips_team_rgb_check_in_growth_mode():
+
+    data = make_valid_data("growth")
+    data["colours"]["team_colours_enabled"] = False
+    del data["colours"]["team_rgb"]  # forced off, so never rendered
+
+    config = Config(data, path="<test>")
+
+    config.validate_gameplay()  # should not raise
+
+
+@pytest.mark.parametrize("bad_value", ["true", 1, 0, [], {}])
+def test_team_colours_enabled_non_boolean_raises(bad_value):
+
+    data = make_valid_data("static")
+    data["colours"]["team_colours_enabled"] = bad_value
+
+    config = Config(data, path="<test>")
+
+    with pytest.raises(ConfigError):
+        config.validate_gameplay()
+
+
 @pytest.mark.parametrize("key", ["width", "height", "data_centre_radius"])
 def test_non_positive_profile_values_raise(key):
 

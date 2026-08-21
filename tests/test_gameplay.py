@@ -9,6 +9,7 @@ from src.gameplay import (
     apply_billionaire_steals,
     apply_president_claims,
     update_growth_radii,
+    rebuild_map,
     score_visible_cards,
     check_area_bonus,
     compute_coverage_percentage,
@@ -16,7 +17,8 @@ from src.gameplay import (
 
 
 def make_card(marker_id, card_type, team, position=(0, 0), radius=80,
-              visible=True, owner_team=None, locked=False):
+              visible=True, owner_team=None, locked=False,
+              billionaire_reactivated=False):
 
     return {
         "id": marker_id,
@@ -28,6 +30,7 @@ def make_card(marker_id, card_type, team, position=(0, 0), radius=80,
         "locked": locked,
         "radius": radius,
         "last_seen": 0.0,
+        "billionaire_reactivated": billionaire_reactivated,
     }
 
 
@@ -115,6 +118,7 @@ def test_billionaire_steals_unprotected_datacentre_from_other_team():
 
     assert dc["owner_team"] == 2
     assert dc["locked"] is False
+    assert dc["billionaire_reactivated"] is True
 
 
 def test_billionaire_does_not_steal_own_team_datacentre():
@@ -125,6 +129,7 @@ def test_billionaire_does_not_steal_own_team_datacentre():
     apply_billionaire_steals([[dc, billionaire]])
 
     assert dc["owner_team"] == 1
+    assert dc["billionaire_reactivated"] is False
 
 
 def test_billionaire_cannot_steal_locked_datacentre():
@@ -135,9 +140,13 @@ def test_billionaire_cannot_steal_locked_datacentre():
     apply_billionaire_steals([[dc, billionaire]])
 
     assert dc["owner_team"] == 1
+    assert dc["billionaire_reactivated"] is False
 
 
-def test_billionaire_cannot_steal_blocked_datacentre():
+def test_billionaire_steals_and_reactivates_blocked_datacentre():
+    # Under the new rules, a Billionaire acts even on a blocked stack
+    # (Activist without a Lawyer) as long as it could actually steal
+    # the Data Centre - that steal is also what reactivates it.
 
     dc = make_card(1, "d", team=1, owner_team=1)
     activist = make_card(2, "a", team=1)
@@ -145,7 +154,91 @@ def test_billionaire_cannot_steal_blocked_datacentre():
 
     apply_billionaire_steals([[dc, activist, billionaire]])
 
+    assert dc["owner_team"] == 2
+    assert dc["billionaire_reactivated"] is True
+
+
+def test_billionaire_same_team_leaves_blocked_datacentre_blocked():
+    # A same-team Billionaire can never steal, so it never reactivates
+    # either - it stays permanently False, since becoming True requires
+    # an actual ownership-changing steal.
+
+    dc = make_card(1, "d", team=1, owner_team=1)
+    activist = make_card(2, "a", team=1)
+    billionaire = make_card(3, "b", team=1)
+
+    apply_billionaire_steals([[dc, activist, billionaire]])
+
     assert dc["owner_team"] == 1
+    assert dc["billionaire_reactivated"] is False
+
+
+def test_billionaire_locked_datacentre_stays_blocked_despite_flag():
+    # A locked Data Centre can't be reactivated by a Billionaire even
+    # if it was somehow left with a stale True flag from an earlier
+    # state - locked always forces it back to False.
+
+    dc = make_card(1, "d", team=1, owner_team=1, locked=True,
+                    billionaire_reactivated=True)
+    activist = make_card(2, "a", team=1)
+    billionaire = make_card(3, "b", team=2)
+
+    apply_billionaire_steals([[dc, activist, billionaire]])
+
+    assert dc["owner_team"] == 1
+    assert dc["billionaire_reactivated"] is False
+
+
+def test_billionaire_reactivation_persists_while_billionaire_stays():
+    # Frame 1: steal + reactivate. Frame 2: owner_team already matches
+    # the Billionaire's team, so no new steal happens - but the
+    # Billionaire is still physically there, so reactivation must
+    # persist rather than snapping back to blocked.
+
+    dc = make_card(1, "d", team=1, owner_team=1)
+    activist = make_card(2, "a", team=1)
+    billionaire = make_card(3, "b", team=2)
+
+    stack = [dc, activist, billionaire]
+
+    apply_billionaire_steals([stack])
+    assert dc["billionaire_reactivated"] is True
+
+    apply_billionaire_steals([stack])  # simulate a second frame, still stacked
+    assert dc["owner_team"] == 2
+    assert dc["billionaire_reactivated"] is True
+
+
+def test_billionaire_reactivation_lapses_once_billionaire_leaves():
+    # Once the Billionaire physically leaves the stack, a previously
+    # earned reactivation must lapse and the unlawyered Activist
+    # resumes blocking.
+
+    dc = make_card(1, "d", team=1, owner_team=2,
+                    billionaire_reactivated=True)  # already stolen earlier
+    activist = make_card(2, "a", team=1)
+
+    apply_billionaire_steals([[dc, activist]])  # no billionaire this frame
+
+    assert dc["billionaire_reactivated"] is False
+
+
+def test_billionaire_only_reactivates_the_datacentre_it_can_steal():
+    # Two Data Centres in one stack with different owners, one
+    # Billionaire eligible to steal only one of them.
+
+    dc_stealable = make_card(1, "d", team=1, owner_team=1, position=(0, 0))
+    dc_own_team = make_card(2, "d", team=2, owner_team=2, position=(0, 0))
+    activist = make_card(3, "a", team=1, position=(0, 0))
+    billionaire = make_card(4, "b", team=2, position=(0, 0))
+
+    apply_billionaire_steals([[dc_stealable, dc_own_team, activist, billionaire]])
+
+    assert dc_stealable["owner_team"] == 2
+    assert dc_stealable["billionaire_reactivated"] is True
+
+    assert dc_own_team["owner_team"] == 2  # unchanged, already its own team
+    assert dc_own_team["billionaire_reactivated"] is False
 
 
 def test_billionaire_steal_is_idempotent_on_repeat_calls():
@@ -308,6 +401,37 @@ def test_shrink_never_crosses_min_radius_floor():
     assert dc["radius"] == 10
 
 
+def test_locked_datacentre_does_not_shrink_despite_block():
+    # A President-claimed (locked) Data Centre always renders as land -
+    # it must not silently shrink in growth mode just because its
+    # stack is otherwise blocked.
+
+    dc = make_card(1, "d", team=1, position=(0, 0), radius=50, locked=True)
+    activist = make_card(2, "a", team=1, position=(0, 0))
+
+    cards = {1: dc}
+    stacks = [[dc, activist]]
+
+    update_growth_radii(dt=1.0, stacks=stacks, cards=cards, growth_rate=10, min_radius=10)
+
+    # Isolated unblocked node -> N=1 -> +10, not the blocked shrink path.
+    assert dc["radius"] == pytest.approx(60.0)
+
+
+def test_billionaire_reactivated_datacentre_does_not_shrink_despite_block():
+
+    dc = make_card(1, "d", team=1, position=(0, 0), radius=50,
+                    billionaire_reactivated=True)
+    activist = make_card(2, "a", team=1, position=(0, 0))
+
+    cards = {1: dc}
+    stacks = [[dc, activist]]
+
+    update_growth_radii(dt=1.0, stacks=stacks, cards=cards, growth_rate=10, min_radius=10)
+
+    assert dc["radius"] == pytest.approx(60.0)
+
+
 # ============================================================
 # score_visible_cards
 # ============================================================
@@ -342,6 +466,32 @@ def test_growth_mode_blocked_datacentre_scores_zero():
 
     assert points[1] == 0
     assert scores[1] == 0
+
+
+@pytest.mark.parametrize(
+    "dc_kwargs",
+    [
+        {"locked": True},
+        {"billionaire_reactivated": True},
+    ],
+)
+def test_growth_mode_locked_or_reactivated_datacentre_still_scores(dc_kwargs):
+    # A Data Centre that renders as land and grows normally (locked or
+    # billionaire_reactivated) must not be silently excluded from
+    # scoring just because its stack is otherwise blocked.
+
+    dc = make_card(1, "d", team=1, owner_team=1, **dc_kwargs)
+    activist = make_card(2, "a", team=1)
+
+    cards = {1: dc, 2: activist}
+    scores = {1: 0}
+
+    stacks = [[dc, activist]]
+
+    points = score_visible_cards(cards, scores, num_teams=1, game_mode="growth", stacks=stacks)
+
+    assert points[1] == 1
+    assert scores[1] == 1
 
 
 def test_scoring_uses_owner_team_not_printed_team():
@@ -453,3 +603,135 @@ def test_area_bonus_fires_at_configured_threshold_without_full_coverage():
 
     assert result is True
     assert scores[1] == 90
+
+
+# ============================================================
+# rebuild_map
+# ============================================================
+
+def _land_value_at(engine, position):
+
+    x, y = position
+
+    return int(engine.land_mask[y, x])
+
+
+def test_rebuild_map_lone_datacentre_is_land():
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100))
+
+    rebuild_map(engine, stacks=[[dc]])
+
+    assert _land_value_at(engine, (100, 100)) == 1
+
+
+def test_rebuild_map_unlawyered_activist_blocks_datacentre():
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100))
+    activist = make_card(2, "a", team=1, position=(100, 100))
+
+    rebuild_map(engine, stacks=[[dc, activist]])
+
+    assert _land_value_at(engine, (100, 100)) == 0
+
+
+def test_rebuild_map_lawyer_reactivates_blocked_datacentre():
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100))
+    activist = make_card(2, "a", team=1, position=(100, 100))
+    lawyer = make_card(3, "l", team=1, position=(100, 100))
+
+    rebuild_map(engine, stacks=[[dc, activist, lawyer]])
+
+    assert _land_value_at(engine, (100, 100)) == 1
+
+
+def test_rebuild_map_locked_datacentre_is_land_despite_block():
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100), locked=True)
+    activist = make_card(2, "a", team=1, position=(100, 100))
+
+    rebuild_map(engine, stacks=[[dc, activist]])
+
+    assert _land_value_at(engine, (100, 100)) == 1
+
+
+def test_rebuild_map_billionaire_reactivated_datacentre_is_land_despite_block():
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    dc = make_card(1, "d", team=1, owner_team=2, position=(100, 100),
+                    billionaire_reactivated=True)
+    activist = make_card(2, "a", team=1, position=(100, 100))
+
+    rebuild_map(engine, stacks=[[dc, activist]])
+
+    assert _land_value_at(engine, (100, 100)) == 2  # painted with owner_team
+
+
+# ============================================================
+# MapEngine.render() / team_colours_enabled
+# ============================================================
+
+def _center_pixel(engine):
+
+    # Gaussian-blurred edges mean a small mask can bleed slightly into the
+    # centre - tolerate rounding/blur noise rather than requiring an exact
+    # colour match.
+    surface = engine.render()
+
+    pixel = surface.get_at((engine.width // 2, engine.height // 2))[:3]
+
+    return tuple(pixel)
+
+
+def _assert_pixel_approx(pixel, expected):
+
+    assert pixel == pytest.approx(expected, abs=3)
+
+
+def _make_engine(mode, team_colours_enabled):
+
+    return MapEngine(
+        20, 20,
+        water_colour=[0, 0, 255],
+        land_colour=[0, 255, 0],
+        mode=mode,
+        team_colours=[[9, 9, 9], [8, 8, 8]],
+        team_colours_enabled=team_colours_enabled,
+    )
+
+
+def test_static_mode_renders_flat_land_colour_by_default():
+
+    engine = _make_engine("static", team_colours_enabled=None)
+    engine.land_mask[:] = 1  # fully owned by team 1
+
+    _assert_pixel_approx(_center_pixel(engine), (0, 255, 0))
+
+
+def test_growth_mode_renders_team_colour_by_default():
+
+    engine = _make_engine("growth", team_colours_enabled=None)
+    engine.land_mask[:] = 1  # fully owned by team 1
+
+    _assert_pixel_approx(_center_pixel(engine), (9, 9, 9))
+
+
+def test_team_colours_enabled_true_forces_team_colour_in_static_mode():
+
+    engine = _make_engine("static", team_colours_enabled=True)
+    engine.land_mask[:] = 2  # fully owned by team 2
+
+    _assert_pixel_approx(_center_pixel(engine), (8, 8, 8))
+
+
+def test_team_colours_enabled_false_forces_flat_colour_in_growth_mode():
+
+    engine = _make_engine("growth", team_colours_enabled=False)
+    engine.land_mask[:] = 1  # fully owned by team 1
+
+    _assert_pixel_approx(_center_pixel(engine), (0, 255, 0))
