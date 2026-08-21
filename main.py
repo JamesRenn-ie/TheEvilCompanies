@@ -282,6 +282,7 @@ print(f"Connected to camera (source={camera_cfg.get('source', 'phone')})")
 # ============================================================
 
 latest_frame = None
+latest_frame_generation = 0
 frame_lock = threading.Lock()
 camera_running = True
 camera_connected = True
@@ -294,6 +295,7 @@ CAMERA_FAILURE_DISCONNECT_THRESHOLD = 30
 def camera_reader():
 
     global latest_frame
+    global latest_frame_generation
     global camera_running
     global camera_connected
 
@@ -328,6 +330,7 @@ def camera_reader():
         # We NEVER build up a queue of frames.
         with frame_lock:
             latest_frame = frame
+            latest_frame_generation += 1
             camera_connected = True
 
 
@@ -393,6 +396,12 @@ def get_latest_frame():
         return latest_frame.copy()
 
 
+def get_latest_frame_generation():
+
+    with frame_lock:
+        return latest_frame_generation
+
+
 def is_camera_connected():
 
     with frame_lock:
@@ -416,7 +425,22 @@ def aruco_detector_worker():
 
     global latest_detection
 
+    # Only re-run detection once a genuinely new camera frame has
+    # arrived - detectMarkers() is expensive, and without this the
+    # loop would otherwise spin flat-out re-processing the same
+    # unchanged frame the instant it finishes each pass, pegging a
+    # CPU core with no benefit (the camera itself often can't supply
+    # new frames anywhere near that fast) and starving everything else
+    # on the system, including the audio callback.
+    last_processed_generation = -1
+
     while detection_running:
+
+        generation = get_latest_frame_generation()
+
+        if generation == last_processed_generation:
+            time.sleep(0.001)
+            continue
 
         frame = get_latest_frame()
 
@@ -425,6 +449,8 @@ def aruco_detector_worker():
             continue
 
         corners, ids, _ = detector.detectMarkers(frame)
+
+        last_processed_generation = generation
 
         with detection_lock:
             latest_detection = (corners, ids, time.time())
@@ -618,12 +644,13 @@ while running:
 
             running = False
 
-        elif event.type == pygame.VIDEORESIZE:
-
-            screen = pygame.display.set_mode(
-                (event.w, event.h),
-                pygame.RESIZABLE
-            )
+        # No VIDEORESIZE handling needed: with pygame.RESIZABLE, the
+        # `screen` Surface already updates in place as the OS window is
+        # dragged - screen.get_size() below always reports the current
+        # size. Calling pygame.display.set_mode() again here would
+        # recreate the window on every resize event, which is exactly
+        # what makes some Linux window managers (e.g. GNOME) snap the
+        # window back to its default position mid-drag.
 
         elif event.type == pygame.KEYDOWN:
 
@@ -772,11 +799,27 @@ while running:
 
                 history = position_histories[marker_id]
 
-                history.append((detection_time, x, y))
+                # The detection thread may still be working on the next
+                # result, so the same detection_time (and corners) can
+                # come around on several consecutive render frames -
+                # only record it once per distinct detection.
+                if not history or history[-1][0] != detection_time:
+                    history.append((detection_time, x, y))
+
+                # Trim relative to the newest entry's own timestamp, not
+                # wall-clock current_time: detection_time can lag behind
+                # current_time now that detection runs on its own thread,
+                # and comparing against current_time could immediately
+                # evict the entry we just appended, leaving history empty
+                # (np.mean of an empty list is NaN, and int(NaN) crashes).
+                # Trimming relative to the newest entry's own age instead
+                # guarantees that entry (age zero relative to itself) can
+                # never be evicted, so history can never end up empty here.
+                newest_time = history[-1][0]
 
                 while (
                     history
-                    and current_time - history[0][0]
+                    and newest_time - history[0][0]
                     > SMOOTHING_TIME
                 ):
                     history.popleft()
