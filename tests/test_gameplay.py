@@ -3,6 +3,7 @@ import pytest
 
 from src.gameplay import (
     MapEngine,
+    compute_present_cards,
     compute_stack_flags,
     circles_touch,
     find_stacks,
@@ -76,6 +77,64 @@ def test_find_stacks_ignores_invisible_cards():
 
     assert len(stacks) == 1
     assert len(stacks[0]) == 1
+
+
+# ============================================================
+# compute_present_cards - a Data Centre covered by a Lawyer/
+# Billionaire/President (their ArUco marker physically hides the
+# Data Centre's) must not vanish from the game the instant it's
+# covered - that's exactly when these cards are meant to act on it.
+# ============================================================
+
+def test_present_cards_includes_covered_datacentre_near_visible_card():
+    # The Data Centre went invisible (covered), but a Lawyer is
+    # currently visible right where it was last seen - evidence it's
+    # still physically there, just underneath the Lawyer.
+
+    dc = make_card(1, "d", 1, position=(100, 100), visible=False)
+    lawyer = make_card(2, "l", 1, position=(105, 100), visible=True)
+
+    present = compute_present_cards({1: dc, 2: lawyer}, stack_distance=70)
+
+    assert dc in present
+    assert lawyer in present
+
+
+def test_present_cards_excludes_covered_datacentre_with_nothing_nearby():
+    # Genuinely removed from the table: invisible, and nothing else is
+    # anywhere near where it used to be.
+
+    dc = make_card(1, "d", 1, position=(100, 100), visible=False)
+    far_away = make_card(2, "l", 1, position=(2000, 2000), visible=True)
+
+    present = compute_present_cards({1: dc, 2: far_away}, stack_distance=70)
+
+    assert dc not in present
+    assert far_away in present
+
+
+def test_present_cards_does_not_extend_leniency_to_non_datacentre_types():
+    # Only Data Centres get this leniency - an invisible Lawyer near a
+    # visible card must still be excluded, exactly as before.
+
+    lawyer = make_card(1, "l", 1, position=(100, 100), visible=False)
+    other = make_card(2, "d", 1, position=(105, 100), visible=True)
+
+    present = compute_present_cards({1: lawyer, 2: other}, stack_distance=70)
+
+    assert lawyer not in present
+    assert other in present
+
+
+def test_find_stacks_groups_covered_datacentre_with_the_card_covering_it():
+
+    dc = make_card(1, "d", 1, position=(100, 100), visible=False)
+    lawyer = make_card(2, "l", 1, position=(102, 101), visible=True)
+
+    stacks = find_stacks({1: dc, 2: lawyer}, stack_distance=70)
+
+    assert len(stacks) == 1
+    assert len(stacks[0]) == 2
 
 
 # ============================================================
@@ -323,7 +382,7 @@ def test_isolated_datacentre_grows_at_base_rate():
 
     cards = {1: dc}
 
-    update_growth_radii(dt=1.0, stacks=[], cards=cards, growth_rate=10, min_radius=10)
+    update_growth_radii(dt=1.0, stacks=[], present_data_centres=list(cards.values()), growth_rate=10, min_radius=10)
 
     assert dc["radius"] == pytest.approx(90.0)
 
@@ -336,7 +395,7 @@ def test_three_touching_same_team_datacentres_grow_at_triple_rate():
 
     cards = {1: a, 2: b, 3: c}
 
-    update_growth_radii(dt=1.0, stacks=[], cards=cards, growth_rate=10, min_radius=10)
+    update_growth_radii(dt=1.0, stacks=[], present_data_centres=list(cards.values()), growth_rate=10, min_radius=10)
 
     assert a["radius"] == pytest.approx(80.0)
     assert b["radius"] == pytest.approx(80.0)
@@ -356,7 +415,7 @@ def test_third_party_wedge_invalidates_same_team_edge():
 
     cards = {1: a, 2: b, 3: c}
 
-    update_growth_radii(dt=1.0, stacks=[], cards=cards, growth_rate=10, min_radius=10)
+    update_growth_radii(dt=1.0, stacks=[], present_data_centres=list(cards.values()), growth_rate=10, min_radius=10)
 
     # a and c should each grow as an isolated node (N=1), NOT as a pair (N=2),
     # because b sits between them.
@@ -376,7 +435,7 @@ def test_blocked_datacentre_shrinks_and_does_not_inflate_neighbours():
     # blocked_dc is in a stack with an (unlawyered) activist -> blocked.
     stacks = [[blocked_dc, activist]]
 
-    update_growth_radii(dt=1.0, stacks=stacks, cards=cards, growth_rate=10, min_radius=10)
+    update_growth_radii(dt=1.0, stacks=stacks, present_data_centres=list(cards.values()), growth_rate=10, min_radius=10)
 
     # a/b form their own real 2-cluster; blocked_dc must NOT count toward it.
     assert a["radius"] == pytest.approx(70.0)  # N=2 -> +20
@@ -396,7 +455,7 @@ def test_shrink_never_crosses_min_radius_floor():
     cards = {1: dc}
     stacks = [[dc, activist]]
 
-    update_growth_radii(dt=5.0, stacks=stacks, cards=cards, growth_rate=100, min_radius=10)
+    update_growth_radii(dt=5.0, stacks=stacks, present_data_centres=list(cards.values()), growth_rate=100, min_radius=10)
 
     assert dc["radius"] == 10
 
@@ -412,7 +471,7 @@ def test_locked_datacentre_does_not_shrink_despite_block():
     cards = {1: dc}
     stacks = [[dc, activist]]
 
-    update_growth_radii(dt=1.0, stacks=stacks, cards=cards, growth_rate=10, min_radius=10)
+    update_growth_radii(dt=1.0, stacks=stacks, present_data_centres=list(cards.values()), growth_rate=10, min_radius=10)
 
     # Isolated unblocked node -> N=1 -> +10, not the blocked shrink path.
     assert dc["radius"] == pytest.approx(60.0)
@@ -427,7 +486,7 @@ def test_billionaire_reactivated_datacentre_does_not_shrink_despite_block():
     cards = {1: dc}
     stacks = [[dc, activist]]
 
-    update_growth_radii(dt=1.0, stacks=stacks, cards=cards, growth_rate=10, min_radius=10)
+    update_growth_radii(dt=1.0, stacks=stacks, present_data_centres=list(cards.values()), growth_rate=10, min_radius=10)
 
     assert dc["radius"] == pytest.approx(60.0)
 
@@ -446,7 +505,10 @@ def test_static_mode_scores_blocked_datacentre_unconditionally():
 
     stacks = [[dc, activist]]
 
-    points = score_visible_cards(cards, scores, num_teams=1, game_mode="static", stacks=stacks)
+    points = score_visible_cards(
+        cards, scores, num_teams=1, game_mode="static", stacks=stacks,
+        present_datacentre_ids={dc["id"]},
+    )
 
     assert points[1] == 1  # dc scores; activist type is always excluded
     assert scores[1] == 1
@@ -462,7 +524,10 @@ def test_growth_mode_blocked_datacentre_scores_zero():
 
     stacks = [[dc, activist]]
 
-    points = score_visible_cards(cards, scores, num_teams=1, game_mode="growth", stacks=stacks)
+    points = score_visible_cards(
+        cards, scores, num_teams=1, game_mode="growth", stacks=stacks,
+        present_datacentre_ids={dc["id"]},
+    )
 
     assert points[1] == 0
     assert scores[1] == 0
@@ -488,7 +553,10 @@ def test_growth_mode_locked_or_reactivated_datacentre_still_scores(dc_kwargs):
 
     stacks = [[dc, activist]]
 
-    points = score_visible_cards(cards, scores, num_teams=1, game_mode="growth", stacks=stacks)
+    points = score_visible_cards(
+        cards, scores, num_teams=1, game_mode="growth", stacks=stacks,
+        present_datacentre_ids={dc["id"]},
+    )
 
     assert points[1] == 1
     assert scores[1] == 1
@@ -501,7 +569,10 @@ def test_scoring_uses_owner_team_not_printed_team():
     cards = {1: dc}
     scores = {1: 0, 2: 0}
 
-    points = score_visible_cards(cards, scores, num_teams=2, game_mode="static", stacks=[])
+    points = score_visible_cards(
+        cards, scores, num_teams=2, game_mode="static", stacks=[],
+        present_datacentre_ids={dc["id"]},
+    )
 
     assert points[2] == 1
     assert points[1] == 0
@@ -670,6 +741,103 @@ def test_rebuild_map_billionaire_reactivated_datacentre_is_land_despite_block():
     rebuild_map(engine, stacks=[[dc, activist]])
 
     assert _land_value_at(engine, (100, 100)) == 2  # painted with owner_team
+
+
+# ============================================================
+# End-to-end: physically covering a Data Centre with a Lawyer/
+# Billionaire/President must not stop its circle from rendering, even
+# though covering it is exactly what makes its own ArUco marker
+# undetectable. These chain find_stacks -> game rules -> rebuild_map
+# the same way main.py does per frame.
+# ============================================================
+
+def test_lawyer_stacked_directly_on_covered_datacentre_still_renders_land():
+    # Lawyer placed right on top of the Data Centre to reactivate it -
+    # the Data Centre's marker is now covered and undetectable.
+
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100), visible=False)
+    activist = make_card(2, "a", team=1, position=(100, 100), visible=False)
+    lawyer = make_card(3, "l", team=1, position=(101, 99), visible=True)
+
+    cards = {1: dc, 2: activist, 3: lawyer}
+    stacks = find_stacks(cards, stack_distance=70)
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    rebuild_map(engine, stacks)
+
+    assert _land_value_at(engine, (100, 100)) == 1
+
+
+def test_billionaire_stacked_directly_on_covered_datacentre_still_steals_and_renders():
+
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100), visible=False)
+    billionaire = make_card(2, "b", team=2, position=(101, 99), visible=True)
+
+    cards = {1: dc, 2: billionaire}
+    stacks = find_stacks(cards, stack_distance=70)
+
+    apply_billionaire_steals(stacks)
+
+    assert dc["owner_team"] == 2
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    rebuild_map(engine, stacks)
+
+    assert _land_value_at(engine, (100, 100)) == 2
+
+
+def test_president_stacked_directly_on_covered_datacentre_still_claims_and_renders():
+
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100), visible=False)
+    president = make_card(2, "p", team=3, position=(101, 99), visible=True)
+
+    cards = {1: dc, 2: president}
+    stacks = find_stacks(cards, stack_distance=70)
+
+    present_dcs = [card for card in compute_present_cards(cards, 70) if card["type"] == "d"]
+    apply_president_claims(stacks, present_dcs, game_mode="static")
+
+    assert dc["owner_team"] == 3
+    assert dc["locked"] is True
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    rebuild_map(engine, stacks)
+
+    assert _land_value_at(engine, (100, 100)) == 3
+
+
+def test_covered_datacentre_still_scores_while_present():
+
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100), visible=False)
+    lawyer = make_card(2, "l", team=1, position=(101, 99), visible=True)
+
+    cards = {1: dc, 2: lawyer}
+    stacks = find_stacks(cards, stack_distance=70)
+    present_ids = {card["id"] for card in compute_present_cards(cards, 70) if card["type"] == "d"}
+
+    scores = {1: 0}
+    points = score_visible_cards(
+        cards, scores, num_teams=1, game_mode="static", stacks=stacks,
+        present_datacentre_ids=present_ids,
+    )
+
+    assert points[1] == 2  # dc (covered but present) + lawyer (visible)
+    assert scores[1] == 2
+
+
+def test_datacentre_removed_entirely_stops_rendering():
+    # Contrast case: nothing nearby at all - the Data Centre is truly
+    # gone, not just covered, and its circle correctly disappears.
+
+    dc = make_card(1, "d", team=1, owner_team=1, position=(100, 100), visible=False)
+
+    cards = {1: dc}
+    stacks = find_stacks(cards, stack_distance=70)
+
+    engine = MapEngine(200, 200, water_colour=[0, 0, 255], land_colour=[0, 255, 0])
+    rebuild_map(engine, stacks)
+
+    assert _land_value_at(engine, (100, 100)) == 0
 
 
 # ============================================================

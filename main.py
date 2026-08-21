@@ -12,6 +12,7 @@ from src.audio_manager import audio
 from src.card_assignments import build_card_assignments
 from src.gameplay import (
     MapEngine,
+    compute_present_cards,
     find_stacks,
     apply_billionaire_steals,
     apply_president_claims,
@@ -857,8 +858,20 @@ while running:
             card["visible"] = False
             continue
 
+        # Compare against detection_time (the latest *available*
+        # detection round's own timestamp), not current_time (the
+        # render loop's wall clock). detection now runs on its own
+        # thread and a round can take longer than one render frame -
+        # while the render loop re-processes the same still-current
+        # round across several frames, current_time keeps advancing
+        # but detection_time does not, so comparing against
+        # current_time would falsely age out every card seen in a slow
+        # round well before the next round even finishes. Comparing
+        # against detection_time only accrues age between genuinely
+        # different completed rounds, which is what MARKER_TIMEOUT is
+        # meant to measure.
         if (
-            current_time - card["last_seen"]
+            detection_time - card["last_seen"]
             > MARKER_TIMEOUT
         ):
 
@@ -870,6 +883,19 @@ while running:
 
     stacks = find_stacks(cards, STACK_DISTANCE)
 
+    # A Data Centre stays "present" (and keeps its stack membership,
+    # circle, growth, and score) for as long as something else is
+    # detected within STACK_DISTANCE of where it was last seen - a
+    # Lawyer/Billionaire/President placed directly on it to interact
+    # with it physically covers its ArUco marker, so it can't be
+    # required to stay independently visible without breaking exactly
+    # the interactions that need it covered.
+    present_data_centres = [
+        card
+        for card in compute_present_cards(cards, STACK_DISTANCE)
+        if card["type"] == "d"
+    ]
+
     should_grow = (
         sequence_controller.should_grow
         if SEQUENCE_MODE == "automatic"
@@ -877,17 +903,11 @@ while running:
     )
 
     if GAME_MODE == "growth" and should_grow:
-        update_growth_radii(dt, stacks, cards, RADIUS_GROWTH_RATE, MIN_RADIUS)
+        update_growth_radii(dt, stacks, present_data_centres, RADIUS_GROWTH_RATE, MIN_RADIUS)
 
     apply_billionaire_steals(stacks)
 
-    visible_data_centres = [
-        card
-        for card in cards.values()
-        if card["type"] == "d" and card["visible"]
-    ]
-
-    apply_president_claims(stacks, visible_data_centres, GAME_MODE)
+    apply_president_claims(stacks, present_data_centres, GAME_MODE)
 
     # ========================================================
     # SCORING
@@ -904,7 +924,8 @@ while running:
         while current_time >= next_scoring_time:
 
             points_awarded = score_visible_cards(
-                cards, scores, NUM_TEAMS, GAME_MODE, stacks
+                cards, scores, NUM_TEAMS, GAME_MODE, stacks,
+                present_datacentre_ids={dc["id"] for dc in present_data_centres},
             )
 
             print("\n--- SCORING ---")

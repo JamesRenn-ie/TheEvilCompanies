@@ -45,11 +45,27 @@ def circles_touch(card_a, card_b):
 # STACK DETECTION
 # ============================================================
 
-def find_stacks(cards, stack_distance):
+def compute_present_cards(cards, stack_distance):
     """
-    Find groups of currently-visible cards which are physically on top
-    of each other. Cards within `stack_distance` pixels of any other
-    card already in a group are treated as one stack.
+    Every currently-visible card, PLUS any Data Centre that has gone
+    invisible but still has a currently-visible card within
+    stack_distance of its last-known position.
+
+    A Data Centre's ArUco marker is physically covered whenever a
+    Lawyer/Billionaire/President is stacked directly on top of it to
+    interact with it - that's the whole point of stacking. Without
+    this, the Data Centre would drop out of every stack the instant
+    something reactivates or claims it, and its circle would simply
+    stop being drawn. Something else being detected exactly where the
+    Data Centre last was is treated as evidence it's still physically
+    on the table, just occluded, rather than genuinely removed - the
+    same proximity concept find_stacks already uses everywhere else.
+    Once nothing remains near that spot, the Data Centre naturally
+    stops qualifying and drops out on its own.
+
+    Only Data Centres get this leniency: they're the only card type
+    whose ongoing presence is inferred rather than always requiring
+    its own live detection.
     """
 
     visible_cards = [
@@ -57,6 +73,34 @@ def find_stacks(cards, stack_distance):
         for card in cards.values()
         if card["visible"] and card["position"] is not None
     ]
+
+    covered_data_centres = [
+        card
+        for card in cards.values()
+        if card["type"] == "d"
+        and not card["visible"]
+        and card["position"] is not None
+        and any(
+            np.hypot(
+                card["position"][0] - other["position"][0],
+                card["position"][1] - other["position"][1],
+            ) <= stack_distance
+            for other in visible_cards
+        )
+    ]
+
+    return visible_cards + covered_data_centres
+
+
+def find_stacks(cards, stack_distance):
+    """
+    Find groups of present cards (see compute_present_cards) which are
+    physically on top of each other. Cards within `stack_distance`
+    pixels of any other card already in a group are treated as one
+    stack.
+    """
+
+    visible_cards = compute_present_cards(cards, stack_distance)
 
     stacks = []
 
@@ -219,10 +263,11 @@ def apply_president_claims(stacks, visible_data_centres, game_mode):
 # GROWTH-MODE RADIUS SIMULATION
 # ============================================================
 
-def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
+def update_growth_radii(dt, stacks, present_data_centres, growth_rate, min_radius):
     """
-    Growth mode only. Each visible Data Centre's radius changes over
-    real elapsed time `dt` (seconds):
+    Growth mode only. Each present Data Centre's (see
+    compute_present_cards) radius changes over real elapsed time `dt`
+    (seconds):
 
     - Unblocked Data Centres grow at `N * growth_rate` px/sec, where N
       is the size of the connected component of same-owner_team,
@@ -242,13 +287,7 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
       Centre, resuming from whatever radius it currently has.
     """
 
-    visible_dcs = [
-        card
-        for card in cards.values()
-        if card["type"] == "d" and card["visible"]
-    ]
-
-    if not visible_dcs:
+    if not present_data_centres:
         return
 
     blocked_ids = set()
@@ -272,7 +311,7 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
 
     def blocked_by_third(card_a, card_b):
 
-        for other in visible_dcs:
+        for other in present_data_centres:
 
             if other["id"] in (card_a["id"], card_b["id"]):
                 continue
@@ -284,7 +323,7 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
 
     # --- Real graph: unblocked Data Centres only ---
 
-    unblocked = [dc for dc in visible_dcs if dc["id"] not in blocked_ids]
+    unblocked = [dc for dc in present_data_centres if dc["id"] not in blocked_ids]
 
     adjacency = {dc["id"]: [] for dc in unblocked}
 
@@ -348,7 +387,7 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
     #     `component_size` above, or a blocked card would incorrectly
     #     inflate other cards' real growth rate.
 
-    for card in visible_dcs:
+    for card in present_data_centres:
 
         if card["id"] not in blocked_ids:
             continue
@@ -374,7 +413,7 @@ def update_growth_radii(dt, stacks, cards, growth_rate, min_radius):
 
         deltas[card["id"]] = -2 * n_hypothetical * growth_rate * dt
 
-    for card in visible_dcs:
+    for card in present_data_centres:
 
         delta = deltas.get(card["id"], 0.0)
 
@@ -437,7 +476,15 @@ def rebuild_map(map_engine, stacks):
 # SCORING
 # ============================================================
 
-def score_visible_cards(cards, scores, num_teams, game_mode, stacks):
+def score_visible_cards(cards, scores, num_teams, game_mode, stacks, present_datacentre_ids):
+    """
+    present_datacentre_ids: ids of Data Centres considered present this
+    frame (see compute_present_cards) - a Data Centre covered by a
+    Lawyer/Billionaire/President still scores while its circle is
+    still being drawn, instead of silently scoring zero the instant
+    it's no longer independently detectable. Every other card type
+    still requires its own live visibility to score.
+    """
 
     blocked_dc_ids = set()
 
@@ -464,7 +511,12 @@ def score_visible_cards(cards, scores, num_teams, game_mode, stacks):
         if card["type"] == "a":
             continue
 
-        if not card["visible"]:
+        if card["type"] == "d":
+
+            if card["id"] not in present_datacentre_ids:
+                continue
+
+        elif not card["visible"]:
             continue
 
         if (
